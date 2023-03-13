@@ -1,0 +1,66 @@
+% !TeX encoding = UTF-8
+% !TeX spellcheck = en_US
+\documentclass[]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage{tabulary}
+\usepackage{graphicx,booktabs,caption,xcolor,listings,listings,mathtools,nicefrac,rotating,threeparttable}
+
+\title{The sag-tension problem}
+\author{Carlos Kleber c. Arruda}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Just sketching the problem in some pretty equations...
+\end{abstract}
+
+\section{Model}
+
+Premises:
+
+Span depth ratio > 1/8, or inclined supports: the exact solution must be used
+
+Span depth ratio < 1/8 and aligned supports: parabolic approximation can be used
+
+Approaches
+
+* Stationary
+* Eigenfrequency (Vibration)
+* Time dependent
+
+Equação do cabo para vão nivelado
+%
+\begin{align}
+	\frac{\partial}{\partial s} \left( T \frac{dx}{ds}\right) & = 0 \\
+	\frac{\partial}{\partial s} \left( T \frac{dy}{ds}\right) & = -mg
+\end{align}
+
+Para pequenas flechas, aproxima-se pela parábola
+%
+\begin{equation}
+	y = \frac{m g l^2}{2 H} \left[ \frac{x}{l} - \left( \frac{x}{l} \right)^2 \right]
+\end{equation}
+
+
+\begin{align}
+	\frac{\partial}{\partial s} \left[ (T + \tau) \left( \frac{dx}{ds} + \frac{\partial u}{\partial s}\right) \right] & = \rho A \frac{\partial^2 u}{\partial t^2} \\
+	\frac{\partial}{\partial s} \left[ (T + \tau) \left( \frac{dy}{ds} + \frac{\partial v}{\partial s}\right)\right] & = \rho A \frac{\partial^2 v}{\partial t^2} -\rho A g \\
+	\frac{\partial}{\partial s} \left[ (T + \tau) \frac{\partial w}{\partial s} \right] & = \rho A \frac{\partial^2 w}{\partial t^2}	
+\end{align}
+
+
+\begin{equation}
+	\ddot{q} + \mu \dot{q} + q + c_2 q^2 + c_3 q^3 = f(t)
+\end{equation}
+
+Sendo $q$ a coordenada modal, $f$ o vetor arbitrário de força externa, 
+
+Reduced order model (ROM).
+
+
+
+\end{document}
