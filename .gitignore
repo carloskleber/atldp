@@ -1,3 +1,56 @@
-docs/theory.aux
-docs/theory.log
-docs/theory.synctex.gz
+# --- Virtual environments (per-prototype; see ADR-0007) ---
+# The terrain prototype's .venv was ~676 MB — never commit an environment.
+**/.venv/
+**/venv/
+**/env/
+.python-version
+
+# --- Python build / cache artifacts ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Geospatial data: DEM / raster / LiDAR caches (large, derived, ADR-0007) ---
+*.tif
+*.tiff
+*.img
+*.vrt
+*.hgt
+*.las
+*.laz
+*.copc
+*.copc.laz
+*.e57
+*.pdal
+# Elevation / DEM download caches
+**/dem_cache/
+**/.elevation_cache/
+
+# --- Prototype-generated visualizations (Plotly HTML, etc.) ---
+tests/**/*.html
+
+# --- LaTeX build artifacts (docs/theory.tex) ---
+*.aux
+*.log
+*.synctex.gz
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.bbl
+*.blg
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+.history/

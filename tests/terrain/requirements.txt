@@ -1,0 +1,5 @@
+# Terrain prototype — isolated environment (ADR-0007).
+# This prototype is a throwaway sandbox, not a dependency of the core.
+plotly
+pandas
+requests
