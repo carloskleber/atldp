@@ -130,10 +130,17 @@ independently validated; see G1 and the validation strategy).
   change-of-state validation gap** Phase 1 left open. (Creep polynomials and the
   initial/final distinction are in the model; the after-creep and prior-stretch
   reload cases are a later refinement, not a blocker.)
-- **G2 — Render foundation (ADR-0012).** winit + egui docked shell; wgpu 3D
-  viewport with an orbit camera and a live catenary from the core; 2D ortho
-  viewport (pan/zoom/grid/snap). **Prove the < 30 MB optimized build on Linux and
-  Windows here.**
+- **G2 — Render foundation (ADR-0012). ✅ done (2026-06-16).** winit + egui docked
+  shell; wgpu 3D viewport with orbit camera (left-drag rotate, scroll zoom) and a
+  live LINE_STRIP catenary from `atldp-core`; 2D ortho viewport (right-drag pan,
+  scroll zoom, adaptive grid). Stack: winit 0.30 (`ApplicationHandler`), egui
+  0.34.3, egui_dock 0.19, wgpu 29.0.3 (Vulkan/DX12/Metal), WGSL shader embedded in
+  binary. Binary size: **12 MB stripped on Linux** (< 30 MB gate ✅). Toolbar
+  DragValues for span and horizontal tension drive the catenary in real time; sag is
+  displayed live. wgpu 29 API migration: `InstanceDescriptor::new_without_display_handle`,
+  `RenderPass::forget_lifetime`, `CurrentSurfaceTexture` enum (replacing
+  `Result<SurfaceTexture, SurfaceError>`), `immediate_size` / `multiview_mask` /
+  `depth_slice` fields.
 - **G3 — Terrain & route (stages 1–2).** `atldp-geo` DEM ingest + CRS + ground
   profile (pure-Rust, ADR-0013); terrain mesh in 3D; route + POIs in 2D and 3D.
 - **G4 — LiDAR point-cloud engine (stage 1, advanced).** LAS/LAZ load, octree

@@ -16,4 +16,12 @@ atldp-core.workspace = true
 atldp-geo.workspace = true
 atldp-model.workspace = true
 atldp-render.workspace = true
-# winit + egui + egui-wgpu + egui_dock land in G2.
+egui = "0.34.3"
+egui-wgpu = "0.34.3"
+egui-winit = "0.34.3"
+egui_dock = "0.19.1"
+env_logger = "0.11.10"
+glam = "0.33.1"
+pollster = "0.4.0"
+wgpu = "29.0.3"
+winit = "0.30.13"

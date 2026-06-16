@@ -9,4 +9,8 @@ repository.workspace = true
 
 [dependencies]
 atldp-core.workspace = true
-# wgpu + lyon + math crates land in G2 (foundation) and G4 (point-cloud LOD).
+bytemuck = { version = "1.25.0", features = ["derive"] }
+egui = "0.34.3"
+egui-wgpu = "0.34.3"
+glam = "0.33.1"
+wgpu = "29.0.3"

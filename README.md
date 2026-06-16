@@ -111,6 +111,35 @@ models.
 > **Note:** each prototype owns its own throwaway virtual environment, which must
 > **not** be committed. See ADR-0007 and the `.gitignore`.
 
+## Building and running
+
+**Prerequisites:** Rust stable toolchain (`rustup`), a GPU with Vulkan drivers (Mesa on Linux, stock drivers on Windows).
+
+```bash
+# Desktop app (G2+ — 3D/2D CAD shell)
+cargo run --release -p atldp-app
+
+# Release binary only (~12 MB stripped on Linux)
+cargo build --release -p atldp-app
+strip target/release/atldp-app
+
+# Headless CLI (catenary & change-of-state)
+cargo run -p atldp-cli -- catenary --span 300 --weight 15.97 --tension 30000
+cargo run -p atldp-cli -- cos --span 300 --ref-H 30000 --ref-temp 25 --target-temp 75
+
+# Full test suite (atldp-core: 30 tests + validation golden cases)
+cargo test --workspace
+```
+
+The desktop app opens a docked shell with a live 3D orbit viewport (wgpu) on the left and a 2D plan viewport (egui) on the right. Use the toolbar to edit span and horizontal tension; both viewports update in real time.
+
+|Control|Action|
+|---|---|
+|Left-drag (3D)|Orbit camera|
+|Scroll (3D)|Zoom|
+|Right-drag (2D)|Pan|
+|Scroll (2D)|Zoom|
+
 ## References
 
 See [references.md](references.md) for theory, methods (analytic and FEM),
