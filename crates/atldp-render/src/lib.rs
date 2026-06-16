@@ -7,5 +7,6 @@
 
 pub mod camera;
 pub mod catenary_line;
+pub mod terrain_mesh;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
