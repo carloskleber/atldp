@@ -1,15 +1,13 @@
-//! ATLDP desktop CAD application — G3 terrain & route (ADR-0011, ADR-0012).
+//! ATLDP desktop CAD application — G5 manual spotting (ADR-0011, ADR-0012).
 //!
-//! Extends the G2 render foundation with:
-//!   - `atldp-geo` DEM ingest (HGT/SRTM, pure-Rust, ADR-0013)
-//!   - Terrain wireframe in the 3D orbit viewport
-//!   - Terrain profile overlaid in the 2D plan/profile viewport
-//!   - Camera auto-fit to terrain extents on load
+//! Extends G3 terrain/route with:
+//!   - Click-to-place tower spotting on the 2D terrain profile
+//!   - Live catenary computation between consecutive towers
+//!   - Ground clearance check with colour-coded violation highlights
+//!   - Tower and conductor geometry in the 3D viewport (SpottingLines renderer)
 //!
 //! Terrain file: set `ATLDP_TERRAIN=/path/to/tile.hgt` or place
-//! `S23W043.hgt` in `crates/atldp-geo/tests/data/` (gitignored, see
-//! `crates/atldp-geo/tests/fetch_srtm.sh`).  The app runs without terrain;
-//! only the catenary is shown in that case.
+//! `S23W043.hgt` in `crates/atldp-geo/tests/data/` (see fetch_srtm.sh).
 
 use std::sync::Arc;
 
@@ -22,28 +20,37 @@ use winit::{
 };
 
 use atldp_geo::{
+    crs::LocalPlane,
     dem::{wireframe_line_list, Dem, LocalGrid},
     profile::{extract_profile, ProfilePoint},
 };
+use atldp_model::Tower;
 use atldp_render::{
     camera::{Camera2D, OrbitCamera},
-    catenary_line::{CatenaryCallback, CatenaryLineResources, Vertex},
-    terrain_mesh::{TerrainMeshCallback, TerrainMeshResources, TerrainVertex},
+    catenary_line::CatenaryLineResources,
+    spotting_lines::{SpottingCallback, SpottingResources, SpottingVertex},
+    terrain_mesh::{TerrainMeshResources, TerrainVertex},
 };
 
-// ── terrain state (optional) ───────────────────────────────────────────────
+// ── conductor weight ──────────────────────────────────────────────────────────
+const CONDUCTOR_W_N_PER_M: f64 = 15.97; // ACSR Drake
+const CATENARY_SAMPLES: usize = 80;
+
+// ── terrain state (optional) ──────────────────────────────────────────────────
 
 struct TerrainData {
     grid: LocalGrid,
-    /// Wireframe LINE_LIST vertices in local-plane metres.
     wireframe: Vec<TerrainVertex>,
-    /// Ground profile sampled from SW to NE of the tile (200 points).
     profile: Vec<ProfilePoint>,
+    /// Total profile length, metres.
+    profile_total_dist: f64,
+    /// LocalGrid (east, north) of the profile start, metres.
+    profile_3d_start: [f32; 2],
+    /// LocalGrid (east, north) of the profile end, metres.
+    profile_3d_end: [f32; 2],
 }
 
 impl TerrainData {
-    /// Load and prepare terrain from an HGT file.  Returns `None` on any error
-    /// (e.g., file absent) so the app can run without terrain.
     fn load(path: &std::path::Path, sw_lat: i32, sw_lon: i32) -> Option<Self> {
         let bytes = std::fs::read(path).ok()?;
         let dem = Dem::from_hgt(&bytes, sw_lat, sw_lon)
@@ -51,18 +58,12 @@ impl TerrainData {
             .ok()?;
 
         eprintln!(
-            "terrain: loaded {} ({} rows × {} cols, grid = {:.0}×{:.0} km)",
+            "terrain: loaded {} ({} rows × {} cols)",
             path.display(),
             dem.rows,
             dem.cols,
-            dem.to_local_grid(2, 2).east_m / 1000.0,
-            dem.to_local_grid(2, 2).north_m / 1000.0,
         );
 
-        let (elev_min, elev_max) = dem.elev_stats();
-        eprintln!("terrain: elevation {elev_min:.0}–{elev_max:.0} m");
-
-        // 96×96 display grid (balances detail vs. vertex count).
         let grid = dem.to_local_grid(96, 96);
         let raw_verts = wireframe_line_list(&grid);
         let wireframe: Vec<TerrainVertex> = raw_verts
@@ -70,21 +71,79 @@ impl TerrainData {
             .map(|&pos| TerrainVertex { pos })
             .collect();
 
-        // Profile: SW corner → NE corner of the tile, 200 samples.
         let b = dem.bounds;
-        let profile = extract_profile(
-            &dem,
-            b.lat_min + 0.1, b.lon_min + 0.1,
-            b.lat_max - 0.1, b.lon_max - 0.1,
-            200,
+        let lat0 = b.lat_min + 0.1;
+        let lon0 = b.lon_min + 0.1;
+        let lat1 = b.lat_max - 0.1;
+        let lon1 = b.lon_max - 0.1;
+        let profile = extract_profile(&dem, lat0, lon0, lat1, lon1, 200);
+        let profile_total_dist = profile.last().map(|p| p.distance_m).unwrap_or(1.0);
+
+        // Map profile endpoints into the LocalGrid coordinate system.
+        let plane = LocalPlane::new(
+            (b.lat_min + b.lat_max) * 0.5,
+            (b.lon_min + b.lon_max) * 0.5,
+        );
+        let [e0, n0] = plane.to_local(lat0, lon0);
+        let [e1, n1] = plane.to_local(lat1, lon1);
+
+        eprintln!(
+            "terrain: {} wireframe verts, {} profile samples, {:.0} km profile",
+            wireframe.len(),
+            profile.len(),
+            profile_total_dist / 1000.0,
         );
 
-        eprintln!("terrain: {} wireframe vertices, {} profile samples", wireframe.len(), profile.len());
-        Some(Self { grid, wireframe, profile })
+        Some(Self {
+            grid,
+            wireframe,
+            profile,
+            profile_total_dist,
+            profile_3d_start: [e0 as f32, n0 as f32],
+            profile_3d_end: [e1 as f32, n1 as f32],
+        })
+    }
+
+    /// Terrain elevation at a given profile distance (linear interpolation).
+    fn elev_at(&self, dist_m: f64) -> f32 {
+        if self.profile.is_empty() {
+            return 0.0;
+        }
+        let first = &self.profile[0];
+        let last = self.profile.last().unwrap();
+        if dist_m <= first.distance_m {
+            return first.elevation_m;
+        }
+        if dist_m >= last.distance_m {
+            return last.elevation_m;
+        }
+        // Binary search for bracketing points.
+        let idx = self
+            .profile
+            .partition_point(|p| p.distance_m < dist_m);
+        let p1 = &self.profile[idx - 1];
+        let p2 = &self.profile[idx];
+        let t = ((dist_m - p1.distance_m) / (p2.distance_m - p1.distance_m)) as f32;
+        if p1.elevation_m.is_nan() || p2.elevation_m.is_nan() {
+            return f32::NAN;
+        }
+        p1.elevation_m + t * (p2.elevation_m - p1.elevation_m)
+    }
+
+    /// (east, north) in LocalGrid space for a given profile distance.
+    fn east_north_at(&self, dist_m: f64) -> [f32; 2] {
+        let t = if self.profile_total_dist > 0.0 {
+            (dist_m / self.profile_total_dist) as f32
+        } else {
+            0.0
+        };
+        let e = self.profile_3d_start[0] + t * (self.profile_3d_end[0] - self.profile_3d_start[0]);
+        let n = self.profile_3d_start[1] + t * (self.profile_3d_end[1] - self.profile_3d_start[1]);
+        [e, n]
     }
 }
 
-// ── tab identifiers ────────────────────────────────────────────────────────────
+// ── tab identifiers ───────────────────────────────────────────────────────────
 
 #[derive(Clone, PartialEq)]
 enum Tab {
@@ -105,8 +164,8 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = WindowAttributes::default()
-            .with_title("ATLDP — terrain & route (G3)")
-            .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 800u32));
+            .with_title("ATLDP — manual spotting (G5)")
+            .with_inner_size(winit::dpi::LogicalSize::new(1400u32, 860u32));
         let window = Arc::new(event_loop.create_window(attrs).expect("window"));
         self.state = Some(AppState::new(window));
     }
@@ -147,10 +206,14 @@ struct AppState {
     orbit: OrbitCamera,
     cam2d: Camera2D,
 
-    span_m: f64,
     h_tension_n: f64,
-
     terrain: Option<TerrainData>,
+
+    // G5 spotting state
+    towers: Vec<Tower>,
+    spotting_mode: bool,
+    attachment_height_m: f64,
+    min_clearance_m: f64,
 }
 
 impl AppState {
@@ -230,6 +293,9 @@ impl AppState {
         egui_renderer
             .callback_resources
             .insert(TerrainMeshResources::new(&device, fmt));
+        egui_renderer
+            .callback_resources
+            .insert(SpottingResources::new(&device, fmt));
 
         let mut dock_state = egui_dock::DockState::new(vec![Tab::View3D]);
         let [_, right] = dock_state
@@ -237,21 +303,15 @@ impl AppState {
             .split_right(egui_dock::NodeIndex::root(), 0.5, vec![Tab::View2D]);
         let _ = right;
 
-        // Try to load terrain from ATLDP_TERRAIN env var or the default test
-        // data path generated by fetch_srtm.sh.
         let terrain = Self::try_load_terrain();
-
-        // Position the camera: if terrain is loaded, orbit its centre at a
-        // distance that fits the full extent; otherwise fall back to catenary.
         let orbit = Self::init_camera(&terrain);
 
-        // 2D camera: if terrain, centre on mid-profile; else catenary midspan.
         let cam2d = if let Some(ref t) = terrain {
             let mid_dist = t.profile.last().map(|p| p.distance_m as f32 * 0.5).unwrap_or(150.0);
             let mid_elev = t.grid.elev_min + (t.grid.elev_max - t.grid.elev_min) * 0.5;
             let mut c = Camera2D::new();
             c.center = [mid_dist, mid_elev];
-            c.pixels_per_metre = 0.008; // 1 px ≈ 125 m for a ~100 km profile
+            c.pixels_per_metre = 0.008;
             c.vertical_exag = 10.0;
             c
         } else {
@@ -270,33 +330,30 @@ impl AppState {
             dock_state,
             orbit,
             cam2d,
-            span_m: 300.0,
             h_tension_n: 30_000.0,
             terrain,
+            towers: Vec::new(),
+            spotting_mode: false,
+            attachment_height_m: 15.0,
+            min_clearance_m: 8.0,
         }
     }
 
     fn try_load_terrain() -> Option<TerrainData> {
-        // 1. ATLDP_TERRAIN env var.
         if let Ok(path) = std::env::var("ATLDP_TERRAIN") {
             let p = std::path::Path::new(&path);
-            // Parse SW corner from filename like "S23W043.hgt".
             if let Some((sw_lat, sw_lon)) = parse_hgt_name(p) {
                 return TerrainData::load(p, sw_lat, sw_lon);
             }
-            eprintln!("terrain: could not parse lat/lon from ATLDP_TERRAIN filename; skipping");
+            eprintln!("terrain: could not parse lat/lon from ATLDP_TERRAIN filename");
         }
-
-        // 2. Default test tile (generated by fetch_srtm.sh).
         let default = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../atldp-geo/tests/data/S23W043.hgt");
         if default.exists() {
             return TerrainData::load(&default, -23, -43);
         }
-
         eprintln!("terrain: no HGT file found — running without terrain.");
         eprintln!("         Set ATLDP_TERRAIN=/path/to/tile.hgt");
-        eprintln!("         or run crates/atldp-geo/tests/fetch_srtm.sh");
         None
     }
 
@@ -314,15 +371,12 @@ impl AppState {
             c.far = extent * 8.0;
             c
         } else {
-            let mut c = OrbitCamera::new();
-            c.target = glam::Vec3::new(150.0, -5.0, 0.0);
-            c
+            OrbitCamera::new()
         }
     }
 
     fn on_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         let resp = self.egui_winit.on_window_event(&self.window, &event);
-
         if resp.consumed {
             match &event {
                 WindowEvent::Resized(sz) => self.resize(*sz),
@@ -332,7 +386,6 @@ impl AppState {
             }
             return;
         }
-
         match event {
             WindowEvent::Resized(sz) => self.resize(sz),
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -438,12 +491,11 @@ impl AppState {
     }
 
     fn build_ui(&mut self, ui: &mut egui::Ui) {
-        let cat_verts = catenary_vertices(self.span_m, self.h_tension_n);
         let size = self.window.inner_size();
         let aspect = size.width as f32 / size.height.max(1) as f32;
         let view_proj = self.orbit.view_proj(aspect).to_cols_array_2d();
 
-        // toolbar
+        // ── toolbar ──
         egui::Panel::top("toolbar")
             .exact_size(32.0)
             .show_inside(ui, |ui| {
@@ -451,12 +503,11 @@ impl AppState {
                     ui.strong("ATLDP");
                     ui.separator();
 
-                    // Terrain status indicator.
                     if let Some(ref t) = self.terrain {
                         ui.colored_label(
                             egui::Color32::from_rgb(80, 200, 120),
                             format!(
-                                "Terrain: {:.0}×{:.0} km, {:.0}–{:.0} m",
+                                "Terrain {:.0}×{:.0} km  {:.0}–{:.0} m",
                                 t.grid.east_m / 1000.0,
                                 t.grid.north_m / 1000.0,
                                 t.grid.elev_min,
@@ -466,26 +517,42 @@ impl AppState {
                     } else {
                         ui.colored_label(
                             egui::Color32::from_gray(120),
-                            "No terrain  (set ATLDP_TERRAIN or run fetch_srtm.sh)",
+                            "No terrain",
                         );
                     }
 
                     ui.separator();
-                    ui.label("Span:");
+
+                    // Spotting toggle
+                    let spot_label = if self.spotting_mode { "⬛ Stop spotting" } else { "🗼 Spot towers" };
+                    if ui.button(spot_label).clicked() {
+                        self.spotting_mode = !self.spotting_mode;
+                    }
+
+                    ui.label("Attach h:");
                     ui.add(
-                        egui::DragValue::new(&mut self.span_m)
-                            .range(10.0..=2000.0)
-                            .speed(1.0)
+                        egui::DragValue::new(&mut self.attachment_height_m)
+                            .range(5.0..=80.0)
+                            .speed(0.5)
                             .suffix(" m"),
                     );
-                    ui.label("H tension:");
+
+                    ui.label("Min clear:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.min_clearance_m)
+                            .range(1.0..=30.0)
+                            .speed(0.1)
+                            .suffix(" m"),
+                    );
+
+                    ui.label("H tens:");
                     ui.add(
                         egui::DragValue::new(&mut self.h_tension_n)
                             .range(500.0..=300_000.0)
                             .speed(100.0)
                             .suffix(" N"),
                     );
-                    ui.separator();
+
                     ui.label("V.Exag:");
                     ui.add(
                         egui::DragValue::new(&mut self.cam2d.vertical_exag)
@@ -493,18 +560,108 @@ impl AppState {
                             .speed(0.1)
                             .suffix("×"),
                     );
+
                     ui.separator();
-                    let sag = cat_verts
-                        .iter()
-                        .map(|v| v.pos[1] as f64)
-                        .fold(f64::INFINITY, f64::min)
-                        .abs();
-                    ui.label(format!("sag ≈ {sag:.2} m"));
+                    ui.label(format!("Towers: {}", self.towers.len()));
+
+                    if ui.button("Undo").clicked() && !self.towers.is_empty() {
+                        self.towers.pop();
+                    }
+                    if ui.button("Clear").clicked() {
+                        self.towers.clear();
+                    }
+
+                    // Worst clearance indicator
+                    if self.towers.len() >= 2 {
+                        if let Some(ref t) = self.terrain {
+                            let worst = worst_clearance(
+                                &t.profile,
+                                &self.towers,
+                                self.h_tension_n,
+                                self.min_clearance_m,
+                            );
+                            let (color, label) = if worst < 0.0 {
+                                (egui::Color32::RED, format!("⚠ min clear {worst:.1} m"))
+                            } else if worst < self.min_clearance_m {
+                                (egui::Color32::YELLOW, format!("⚠ min clear {worst:.1} m"))
+                            } else {
+                                (egui::Color32::from_rgb(80, 200, 120), format!("✓ min clear {worst:.1} m"))
+                            };
+                            ui.colored_label(color, label);
+                        }
+                    }
                 });
             });
 
+        // ── right panel: tower / span data ──
+        let towers_snap = self.towers.clone();
+        let h_tension = self.h_tension_n;
+        let min_clear = self.min_clearance_m;
         let terrain_ref = self.terrain.as_ref();
 
+        egui::Panel::right("spotting_panel")
+            .default_size(260.0)
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.strong("Towers");
+                    ui.separator();
+                    egui::Grid::new("tower_grid")
+                        .striped(true)
+                        .min_col_width(48.0)
+                        .show(ui, |ui| {
+                            ui.label("#");
+                            ui.label("Dist (km)");
+                            ui.label("Gnd (m)");
+                            ui.label("Att (m)");
+                            ui.end_row();
+                            for (i, tw) in towers_snap.iter().enumerate() {
+                                ui.label(format!("T{}", i + 1));
+                                ui.label(format!("{:.2}", tw.distance_m / 1000.0));
+                                ui.label(format!("{:.0}", tw.ground_elevation_m));
+                                ui.label(format!("{:.0}", tw.attachment_elevation_m()));
+                                ui.end_row();
+                            }
+                        });
+
+                    if towers_snap.len() >= 2 {
+                        ui.add_space(8.0);
+                        ui.strong("Spans");
+                        ui.separator();
+                        egui::Grid::new("span_grid")
+                            .striped(true)
+                            .min_col_width(48.0)
+                            .show(ui, |ui| {
+                                ui.label("Span");
+                                ui.label("Horiz (m)");
+                                ui.label("Sag (m)");
+                                ui.label("Min clr (m)");
+                                ui.end_row();
+                                for i in 0..towers_snap.len() - 1 {
+                                    let t1 = &towers_snap[i];
+                                    let t2 = &towers_snap[i + 1];
+                                    let horiz = t2.distance_m - t1.distance_m;
+                                    let (sag, clr) = span_stats(
+                                        terrain_ref,
+                                        t1,
+                                        t2,
+                                        h_tension,
+                                        min_clear,
+                                    );
+                                    let clr_str = clr
+                                        .map(|c| format!("{c:.1}"))
+                                        .unwrap_or_else(|| "-".to_string());
+                                    ui.label(format!("S{}-{}", i + 1, i + 2));
+                                    ui.label(format!("{horiz:.0}"));
+                                    ui.label(format!("{sag:.1}"));
+                                    ui.label(clr_str);
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                });
+            });
+
+        // ── dock area (3D + 2D views) ──
         egui::CentralPanel::default().show_inside(ui, |ui| {
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style()))
@@ -513,9 +670,13 @@ impl AppState {
                     &mut Viewer {
                         orbit: &mut self.orbit,
                         cam2d: &mut self.cam2d,
-                        cat_verts: &cat_verts,
                         view_proj,
-                        terrain: terrain_ref,
+                        terrain: self.terrain.as_ref(),
+                        towers: &mut self.towers,
+                        spotting_mode: self.spotting_mode,
+                        attachment_height_m: self.attachment_height_m,
+                        h_tension_n: self.h_tension_n,
+                        min_clearance_m: self.min_clearance_m,
                     },
                 );
         });
@@ -527,9 +688,13 @@ impl AppState {
 struct Viewer<'a> {
     orbit: &'a mut OrbitCamera,
     cam2d: &'a mut Camera2D,
-    cat_verts: &'a [Vertex],
     view_proj: [[f32; 4]; 4],
     terrain: Option<&'a TerrainData>,
+    towers: &'a mut Vec<Tower>,
+    spotting_mode: bool,
+    attachment_height_m: f64,
+    h_tension_n: f64,
+    min_clearance_m: f64,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -551,13 +716,14 @@ impl TabViewer for Viewer<'_> {
 }
 
 impl Viewer<'_> {
+    // ── 3D view ───────────────────────────────────────────────────────────────
+
     fn view3d(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(
             ui.available_size(),
             egui::Sense::click_and_drag(),
         );
 
-        // Orbit: left-drag rotates, scroll zooms.
         if resp.dragged_by(egui::PointerButton::Primary) {
             let d = resp.drag_delta();
             self.orbit.yaw -= d.x * 0.005;
@@ -569,13 +735,13 @@ impl Viewer<'_> {
                 .max(10.0);
         }
 
-        // Terrain wireframe callback (drawn first so catenary is on top).
+        // Terrain wireframe
         if let Some(t) = self.terrain {
             let wf = t.wireframe.clone();
             let vp = self.view_proj;
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                TerrainMeshCallback {
+                atldp_render::terrain_mesh::TerrainMeshCallback {
                     vertices: wf,
                     view_proj: vp,
                     elev_min: t.grid.elev_min,
@@ -584,28 +750,23 @@ impl Viewer<'_> {
             ));
         }
 
-        // Catenary (shown when no terrain, or always in orbit mode).
-        if self.terrain.is_none() {
-            let verts: Vec<Vertex> = self.cat_verts.to_vec();
+        // Spotting geometry (towers + conductors)
+        let spot_verts = self.build_spotting_vertices_3d();
+        if !spot_verts.is_empty() {
             let vp = self.view_proj;
             ui.painter().add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                CatenaryCallback { vertices: verts, view_proj: vp },
+                SpottingCallback { vertices: spot_verts, view_proj: vp },
             ));
         }
 
-        // HUD overlay.
-        let terrain_label = self
-            .terrain
-            .map(|t| {
-                format!(
-                    "terrain: {:.0}×{:.0} km  elev {:.0}–{:.0} m",
-                    t.grid.east_m / 1000.0,
-                    t.grid.north_m / 1000.0,
-                    t.grid.elev_min,
-                    t.grid.elev_max,
-                )
-            })
+        // HUD
+        let terrain_label = self.terrain
+            .map(|t| format!(
+                "terrain {:.0}×{:.0} km  elev {:.0}–{:.0} m",
+                t.grid.east_m / 1000.0, t.grid.north_m / 1000.0,
+                t.grid.elev_min, t.grid.elev_max,
+            ))
             .unwrap_or_else(|| "no terrain loaded".to_string());
 
         ui.painter().text(
@@ -629,6 +790,55 @@ impl Viewer<'_> {
         );
     }
 
+    /// Build LINE_LIST vertices for towers and conductors in 3D space.
+    fn build_spotting_vertices_3d(&self) -> Vec<SpottingVertex> {
+        let Some(terrain) = self.terrain else {
+            return vec![];
+        };
+        let mut verts = Vec::new();
+        let tower_col = [1.0_f32, 0.95, 0.80, 1.0]; // warm white
+        let cond_ok = [0.2_f32, 0.85, 1.0, 1.0];    // cyan
+        let cond_vio = [1.0_f32, 0.22, 0.22, 1.0];  // red
+
+        for tw in self.towers.iter() {
+            let [e, n] = terrain.east_north_at(tw.distance_m);
+            let ground = tw.ground_elevation_m as f32;
+            let attach = tw.attachment_elevation_m() as f32;
+            // Vertical post
+            verts.push(SpottingVertex { pos: [e, ground, n], col: tower_col });
+            verts.push(SpottingVertex { pos: [e, attach, n], col: tower_col });
+            // Short crossarm (4 m each side along east axis)
+            verts.push(SpottingVertex { pos: [e - 4.0, attach, n], col: tower_col });
+            verts.push(SpottingVertex { pos: [e + 4.0, attach, n], col: tower_col });
+        }
+
+        // Conductors
+        for win in self.towers.windows(2) {
+            let t1 = &win[0];
+            let t2 = &win[1];
+            let clearance_ok = terrain
+                .profile
+                .len() >= 2
+                && min_clearance_span(&terrain.profile, t1, t2, self.h_tension_n)
+                    >= self.min_clearance_m;
+            let col = if clearance_ok { cond_ok } else { cond_vio };
+
+            let pts = catenary_profile_pts(t1, t2, self.h_tension_n, CATENARY_SAMPLES);
+            for seg in pts.windows(2) {
+                let (d0, y0) = seg[0];
+                let (d1, y1) = seg[1];
+                let [e0, n0] = terrain.east_north_at(d0);
+                let [e1, n1] = terrain.east_north_at(d1);
+                verts.push(SpottingVertex { pos: [e0, y0 as f32, n0], col });
+                verts.push(SpottingVertex { pos: [e1, y1 as f32, n1], col });
+            }
+        }
+
+        verts
+    }
+
+    // ── 2D profile view ───────────────────────────────────────────────────────
+
     fn view2d(&mut self, ui: &mut egui::Ui) {
         let (rect, resp) = ui.allocate_exact_size(
             ui.available_size(),
@@ -646,6 +856,37 @@ impl Viewer<'_> {
         if resp.hovered() && scroll != 0.0 {
             self.cam2d.pixels_per_metre =
                 (self.cam2d.pixels_per_metre * (1.0 + scroll * 0.01)).clamp(0.001, 200.0);
+        }
+
+        // Tower placement on left-click (primary button, no drag).
+        if self.spotting_mode {
+            if resp.clicked_by(egui::PointerButton::Primary) {
+                if let Some(pointer_pos) = resp.interact_pointer_pos() {
+                    let vp = [rect.width(), rect.height()];
+                    let sx = pointer_pos.x - rect.left();
+                    let _sy = pointer_pos.y - rect.top();
+                    let world_x = (self.cam2d.center[0] as f64)
+                        + ((sx - vp[0] * 0.5) / self.cam2d.pixels_per_metre) as f64;
+                    let ground_elev = self.terrain
+                        .map(|t| t.elev_at(world_x) as f64)
+                        .unwrap_or(0.0);
+                    if !ground_elev.is_nan() {
+                        // Avoid placing a tower at nearly the same location as the last.
+                        let too_close = self.towers.last().map(|tw| {
+                            (tw.distance_m - world_x).abs() < 10.0
+                        }).unwrap_or(false);
+                        if !too_close {
+                            self.towers.push(Tower {
+                                distance_m: world_x,
+                                ground_elevation_m: ground_elev,
+                                attachment_height_m: self.attachment_height_m,
+                            });
+                            // Keep sorted by distance.
+                            self.towers.sort_by(|a, b| a.distance_m.partial_cmp(&b.distance_m).unwrap());
+                        }
+                    }
+                }
+            }
         }
 
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(18, 18, 22));
@@ -693,22 +934,21 @@ impl Viewer<'_> {
             );
         }
 
-        // Terrain profile (ground line): distance on X, elevation on Y.
+        // ── terrain profile ──
         if let Some(t) = self.terrain {
-            let profile_pts: Vec<egui::Pos2> = t
-                .profile
+            let profile_pts: Vec<egui::Pos2> = t.profile
                 .iter()
                 .filter(|p| !p.elevation_m.is_nan())
                 .map(|p| {
-                    let [sx, sy] = self
-                        .cam2d
-                        .world_to_screen([p.distance_m as f32, p.elevation_m as f32], vp);
+                    let [sx, sy] = self.cam2d.world_to_screen(
+                        [p.distance_m as f32, p.elevation_m as f32],
+                        vp,
+                    );
                     egui::pos2(rect.left() + sx, rect.top() + sy)
                 })
                 .collect();
 
             if profile_pts.len() >= 2 {
-                // Filled polygon to ground level.
                 let ground_y = self.cam2d.world_to_screen([0.0, 0.0], vp)[1] + rect.top();
                 let ground_y = ground_y.clamp(rect.top(), rect.bottom());
                 let mut poly = profile_pts.clone();
@@ -719,9 +959,7 @@ impl Viewer<'_> {
                     egui::Color32::from_rgba_unmultiplied(50, 90, 40, 80),
                     egui::Stroke::NONE,
                 ));
-                // Terrain profile line.
-                let profile_stroke =
-                    egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 180, 60));
+                let profile_stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 180, 60));
                 for w in profile_pts.windows(2) {
                     painter.line_segment([w[0], w[1]], profile_stroke);
                 }
@@ -731,15 +969,14 @@ impl Viewer<'_> {
             let total = t.profile.last().map(|p| p.distance_m).unwrap_or(1.0);
             for &frac in &[0.0, 0.25, 0.5, 0.75, 1.0_f64] {
                 let target_dist = frac * total;
-                if let Some(p) = t
-                    .profile
-                    .iter()
-                    .min_by_key(|p| ((p.distance_m - target_dist).abs() * 1000.0) as i64)
-                {
+                if let Some(p) = t.profile.iter().min_by_key(|p| {
+                    ((p.distance_m - target_dist).abs() * 1000.0) as i64
+                }) {
                     if !p.elevation_m.is_nan() {
-                        let [px, py] = self
-                            .cam2d
-                            .world_to_screen([p.distance_m as f32, p.elevation_m as f32], vp);
+                        let [px, py] = self.cam2d.world_to_screen(
+                            [p.distance_m as f32, p.elevation_m as f32],
+                            vp,
+                        );
                         painter.text(
                             egui::pos2(rect.left() + px, rect.top() + py - 8.0),
                             egui::Align2::CENTER_BOTTOM,
@@ -752,52 +989,98 @@ impl Viewer<'_> {
             }
         }
 
-        // Catenary overlay (distance = span position, Y = elevation relative to start).
-        if self.cat_verts.len() >= 2 {
-            let cat_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(50, 200, 255));
+        // ── catenary conductors between towers ──
+        let cond_ok_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(50, 200, 255));
+        let cond_vio_stroke = egui::Stroke::new(2.0, egui::Color32::RED);
 
-            // Offset catenary to start at the right of the profile if terrain loaded.
-            let cat_x_offset = self
-                .terrain
-                .and_then(|t| t.profile.last())
-                .map(|p| p.distance_m as f32 * 0.4)
-                .unwrap_or(0.0);
+        for win in self.towers.windows(2) {
+            let t1 = &win[0];
+            let t2 = &win[1];
+            let clearance_ok = self.terrain.map(|ter| {
+                min_clearance_span(&ter.profile, t1, t2, self.h_tension_n)
+                    >= self.min_clearance_m
+            }).unwrap_or(true);
+            let stroke = if clearance_ok { cond_ok_stroke } else { cond_vio_stroke };
 
-            // Find the mean terrain elevation at the catenary location for Y offset.
-            let cat_y_offset = self
-                .terrain
-                .and_then(|t| {
-                    let frac = 0.4_f64;
-                    t.profile
-                        .iter()
-                        .min_by_key(|p| {
-                            let total = t.profile.last().map(|p| p.distance_m).unwrap_or(1.0);
-                            ((p.distance_m - frac * total).abs() * 1000.0) as i64
-                        })
-                        .filter(|p| !p.elevation_m.is_nan())
-                        .map(|p| p.elevation_m)
-                })
-                .unwrap_or(0.0);
-
-            let pts: Vec<egui::Pos2> = self
-                .cat_verts
+            let pts = catenary_profile_pts(t1, t2, self.h_tension_n, CATENARY_SAMPLES);
+            let screen_pts: Vec<egui::Pos2> = pts
                 .iter()
-                .map(|v| {
-                    let world_x = v.pos[0] + cat_x_offset;
-                    let world_y = v.pos[1] + cat_y_offset;
-                    let [sx, sy] = self.cam2d.world_to_screen([world_x, world_y], vp);
+                .map(|&(d, y)| {
+                    let [sx, sy] = self.cam2d.world_to_screen([d as f32, y as f32], vp);
                     egui::pos2(rect.left() + sx, rect.top() + sy)
                 })
                 .collect();
-            for w in pts.windows(2) {
-                painter.line_segment([w[0], w[1]], cat_stroke);
+            for w in screen_pts.windows(2) {
+                painter.line_segment([w[0], w[1]], stroke);
             }
-            for p in [pts.first(), pts.last()].into_iter().flatten() {
-                painter.circle_stroke(*p, 5.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 200, 80)));
+
+            // Clearance annotation at the sag point (mid-span).
+            if let Some(&(d_mid, y_mid)) = pts.get(pts.len() / 2) {
+                if let Some(ter) = self.terrain {
+                    let gnd = ter.elev_at(d_mid) as f64;
+                    if !gnd.is_nan() {
+                        let clr = y_mid - gnd;
+                        let label_col = if clr < self.min_clearance_m {
+                            egui::Color32::RED
+                        } else {
+                            egui::Color32::from_gray(180)
+                        };
+                        let [px, py] = self.cam2d.world_to_screen([d_mid as f32, y_mid as f32], vp);
+                        painter.text(
+                            egui::pos2(rect.left() + px, rect.top() + py - 6.0),
+                            egui::Align2::CENTER_BOTTOM,
+                            format!("{clr:.1} m"),
+                            egui::FontId::monospace(9.0),
+                            label_col,
+                        );
+                    }
+                }
             }
         }
 
-        // Status bar.
+        // ── tower symbols ──
+        let tower_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 220, 100));
+        for (i, tw) in self.towers.iter().enumerate() {
+            let gnd = tw.ground_elevation_m as f32;
+            let att = tw.attachment_elevation_m() as f32;
+            let d = tw.distance_m as f32;
+
+            let [px, py_gnd] = self.cam2d.world_to_screen([d, gnd], vp);
+            let [_, py_att] = self.cam2d.world_to_screen([d, att], vp);
+            let px = rect.left() + px;
+            let py_gnd = rect.top() + py_gnd;
+            let py_att = rect.top() + py_att;
+
+            // Vertical post
+            painter.line_segment([egui::pos2(px, py_gnd), egui::pos2(px, py_att)], tower_stroke);
+            // Short horizontal crossarm (6 px each side)
+            let arm_px = (6.0 * self.cam2d.pixels_per_metre).max(4.0);
+            painter.line_segment(
+                [egui::pos2(px - arm_px, py_att), egui::pos2(px + arm_px, py_att)],
+                tower_stroke,
+            );
+            // Label
+            painter.text(
+                egui::pos2(px, py_att - 4.0),
+                egui::Align2::CENTER_BOTTOM,
+                format!("T{}", i + 1),
+                egui::FontId::monospace(9.0),
+                egui::Color32::from_rgb(255, 220, 100),
+            );
+        }
+
+        // Spotting cursor hint
+        if self.spotting_mode {
+            painter.text(
+                rect.right_top() + egui::vec2(-6.0, 18.0),
+                egui::Align2::RIGHT_TOP,
+                "left-click to place tower",
+                egui::FontId::monospace(10.0),
+                egui::Color32::from_rgb(255, 220, 100),
+            );
+        }
+
+        // Status bar
         painter.text(
             rect.left_bottom() + egui::vec2(6.0, -18.0),
             egui::Align2::LEFT_BOTTOM,
@@ -811,33 +1094,97 @@ impl Viewer<'_> {
     }
 }
 
-// ── catenary vertex sampling ──────────────────────────────────────────────────
+// ── catenary helpers ──────────────────────────────────────────────────────────
 
-fn catenary_vertices(span_m: f64, h_tension_n: f64) -> Vec<Vertex> {
+/// Sample a catenary between two towers: returns `(distance_m, abs_elevation_m)`.
+fn catenary_profile_pts(t1: &Tower, t2: &Tower, h_tension_n: f64, n: usize) -> Vec<(f64, f64)> {
     use atldp_core::catenary::solve_catenary;
-    const W: f64 = 15.97; // ACSR Drake weight per unit length, N/m
-    const N: usize = 120;
-
-    let Ok(sol) = solve_catenary(span_m, 0.0, W, h_tension_n) else {
+    let horiz = t2.distance_m - t1.distance_m;
+    if horiz <= 0.0 {
+        return vec![];
+    }
+    let elev_diff = t2.attachment_elevation_m() - t1.attachment_elevation_m();
+    let Ok(sol) = solve_catenary(horiz, elev_diff, CONDUCTOR_W_N_PER_M, h_tension_n) else {
         return vec![];
     };
     let c = sol.catenary_constant();
     let a = sol.low_point_x;
+    // y_rel(x) = c*cosh((x-a)/c) - c*cosh(a/c)  (=0 at x=0, =elev_diff at x=horiz)
     let b = -c * (a / c).cosh();
+    let e1 = t1.attachment_elevation_m();
 
-    (0..=N)
+    (0..=n)
         .map(|i| {
-            let x = i as f64 / N as f64 * span_m;
-            let y = c * ((x - a) / c).cosh() + b;
-            Vertex { pos: [x as f32, y as f32, 0.0] }
+            let x = i as f64 / n as f64 * horiz;
+            let y_rel = c * ((x - a) / c).cosh() + b;
+            (t1.distance_m + x, e1 + y_rel)
         })
         .collect()
 }
 
+/// Minimum ground clearance for a single span (metres, negative = violation).
+fn min_clearance_span(profile: &[ProfilePoint], t1: &Tower, t2: &Tower, h_tension_n: f64) -> f64 {
+    let pts = catenary_profile_pts(t1, t2, h_tension_n, CATENARY_SAMPLES);
+    let terrain_at = |d: f64| -> f64 {
+        if profile.is_empty() {
+            return 0.0;
+        }
+        let idx = profile.partition_point(|p| p.distance_m < d);
+        if idx == 0 {
+            return profile[0].elevation_m as f64;
+        }
+        if idx >= profile.len() {
+            return profile.last().unwrap().elevation_m as f64;
+        }
+        let p1 = &profile[idx - 1];
+        let p2 = &profile[idx];
+        let t = ((d - p1.distance_m) / (p2.distance_m - p1.distance_m)) as f32;
+        (p1.elevation_m + t * (p2.elevation_m - p1.elevation_m)) as f64
+    };
+    pts.iter()
+        .map(|&(d, y)| {
+            let gnd = terrain_at(d);
+            y - gnd
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Worst (minimum) clearance across all spans, for the toolbar indicator.
+fn worst_clearance(
+    profile: &[ProfilePoint],
+    towers: &[Tower],
+    h_tension_n: f64,
+    _min_clearance_m: f64,
+) -> f64 {
+    towers
+        .windows(2)
+        .map(|w| min_clearance_span(profile, &w[0], &w[1], h_tension_n))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Compute sag and minimum clearance for the side-panel span table.
+fn span_stats(
+    terrain: Option<&TerrainData>,
+    t1: &Tower,
+    t2: &Tower,
+    h_tension_n: f64,
+    _min_clearance_m: f64,
+) -> (f64, Option<f64>) {
+    use atldp_core::catenary::solve_catenary;
+    let horiz = t2.distance_m - t1.distance_m;
+    if horiz <= 0.0 {
+        return (0.0, None);
+    }
+    let elev_diff = t2.attachment_elevation_m() - t1.attachment_elevation_m();
+    let sag = solve_catenary(horiz, elev_diff, CONDUCTOR_W_N_PER_M, h_tension_n)
+        .map(|sol| sol.sag)
+        .unwrap_or(0.0);
+    let clr = terrain.map(|t| min_clearance_span(&t.profile, t1, t2, h_tension_n));
+    (sag, clr)
+}
+
 // ── HGT filename parser ───────────────────────────────────────────────────────
 
-/// Parse SW-corner lat/lon from a filename like `S23W043.hgt` or
-/// `N48E002.hgt`.  Returns `None` if the filename doesn't match.
 fn parse_hgt_name(path: &std::path::Path) -> Option<(i32, i32)> {
     let stem = path.file_stem()?.to_str()?;
     if stem.len() < 7 {

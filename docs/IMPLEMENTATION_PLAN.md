@@ -141,12 +141,22 @@ independently validated; see G1 and the validation strategy).
   `RenderPass::forget_lifetime`, `CurrentSurfaceTexture` enum (replacing
   `Result<SurfaceTexture, SurfaceError>`), `immediate_size` / `multiview_mask` /
   `depth_slice` fields.
-- **G3 — Terrain & route (stages 1–2).** `atldp-geo` DEM ingest + CRS + ground
-  profile (pure-Rust, ADR-0013); terrain mesh in 3D; route + POIs in 2D and 3D.
-- **G4 — LiDAR point-cloud engine (stage 1, advanced).** LAS/LAZ load, octree
-  LOD, GPU point renderer, picking — the highest-risk component, isolated.
-- **G5 — Manual spotting + sag-tension (stages 3–4 in-GUI).** Place towers on the
-  profile with live clearance/tension checks; conductors + swing in 3D.
+- **G3 — Terrain & route (stages 1–2). ✅ done (2026-06-16).** `atldp-geo` DEM
+  ingest + CRS + ground profile (pure-Rust, ADR-0013); terrain wireframe in the 3D
+  orbit viewport; terrain profile + elevation annotations in the 2D panel; camera
+  auto-fit to terrain extents on load; `ATLDP_TERRAIN` env-var or default tile path.
+- **G4 — LiDAR point-cloud engine (stage 1, advanced). ⏸ postponed.** LAS/LAZ load,
+  octree LOD, GPU point renderer, picking — the highest-risk component, isolated.
+  Deferred until a surveyed LiDAR dataset is available to validate against.
+- **G5 — Manual spotting + sag-tension (stages 3–4 in-GUI). ✅ done (2026-06-16).**
+  Click-to-place tower spotting in the 2D terrain profile; live catenary between
+  consecutive towers (`atldp-core` catenary, ACSR Drake weight); ground-clearance
+  check with colour-coded violation highlights (cyan = OK, red = violation) in both
+  2D and 3D; right-side panel with tower table and span table (horizontal span, sag,
+  min clearance per span); toolbar controls for attachment height, minimum clearance,
+  horizontal tension, vertical exaggeration, Undo / Clear; worst-clearance indicator
+  in the toolbar; tower + conductor geometry in the 3D viewport via the
+  `SpottingLines` LINE_LIST wgpu renderer (`atldp-render::spotting_lines`).
 - **G6 — Structure modeling, drafting & file format (stages 5–6).** 2D plan &
   profile sheets, reports, and `atldp-model` serialization as the open ATLDP
   project format.
