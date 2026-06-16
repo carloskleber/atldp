@@ -61,8 +61,11 @@ impl Default for OrbitCamera {
 pub struct Camera2D {
     /// World-space center of the view (metres).
     pub center: [f32; 2],
-    /// Pixels per metre (zoom level).
+    /// Pixels per metre along the horizontal (X) axis.
     pub pixels_per_metre: f32,
+    /// Vertical exaggeration: Y is scaled by this factor relative to X.
+    /// Values > 1 enlarge the vertical axis to emphasise catenary sag.
+    pub vertical_exag: f32,
 }
 
 impl Camera2D {
@@ -70,15 +73,23 @@ impl Camera2D {
         Self {
             center: [150.0, 0.0],
             pixels_per_metre: 1.5,
+            vertical_exag: 5.0,
         }
+    }
+
+    /// Effective pixels-per-metre for the Y axis.
+    #[inline]
+    pub fn scale_y(&self) -> f32 {
+        self.pixels_per_metre * self.vertical_exag
     }
 
     /// World → screen, given `viewport_size` in pixels. Y is flipped (up = screen-up).
     pub fn world_to_screen(&self, world: [f32; 2], viewport: [f32; 2]) -> [f32; 2] {
-        let s = self.pixels_per_metre;
+        let sx = self.pixels_per_metre;
+        let sy = self.scale_y();
         [
-            viewport[0] * 0.5 + (world[0] - self.center[0]) * s,
-            viewport[1] * 0.5 - (world[1] - self.center[1]) * s,
+            viewport[0] * 0.5 + (world[0] - self.center[0]) * sx,
+            viewport[1] * 0.5 - (world[1] - self.center[1]) * sy,
         ]
     }
 }

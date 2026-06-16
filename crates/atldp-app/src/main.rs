@@ -340,6 +340,14 @@ impl AppState {
                             .suffix(" N"),
                     );
                     ui.separator();
+                    ui.label("V.Exag:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.cam2d.vertical_exag)
+                            .range(1.0..=20.0)
+                            .speed(0.1)
+                            .suffix("×"),
+                    );
+                    ui.separator();
                     let sag = verts
                         .iter()
                         .map(|v| v.pos[1] as f64)
@@ -445,9 +453,8 @@ impl Viewer<'_> {
         // pan: right-drag, zoom: scroll
         if resp.dragged_by(egui::PointerButton::Secondary) {
             let d = resp.drag_delta();
-            let s = self.cam2d.pixels_per_metre;
-            self.cam2d.center[0] -= d.x / s;
-            self.cam2d.center[1] += d.y / s;
+            self.cam2d.center[0] -= d.x / self.cam2d.pixels_per_metre;
+            self.cam2d.center[1] += d.y / self.cam2d.scale_y();
         }
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if resp.hovered() && scroll != 0.0 {
@@ -458,40 +465,46 @@ impl Viewer<'_> {
         // background
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(18, 18, 22));
 
-        // grid — spacing adaptive to zoom
-        let s = self.cam2d.pixels_per_metre;
-        let raw = 60.0 / s; // target ~60px between lines
-        let exp = raw.log10().floor() as i32;
-        let grid_m = (10.0_f32).powi(exp) * [1.0, 2.0, 5.0]
-            .iter()
-            .copied()
-            .find(|&v| v * s >= 40.0)
-            .unwrap_or(1.0);
+        // grid — spacing adaptive to zoom, independent for X and Y axes
+        let sx = self.cam2d.pixels_per_metre;
+        let sy = self.cam2d.scale_y();
+        let adaptive_spacing = |px_per_m: f32| -> f32 {
+            let raw = 60.0 / px_per_m;
+            let exp = raw.log10().floor() as i32;
+            (10.0_f32).powi(exp)
+                * [1.0, 2.0, 5.0]
+                    .iter()
+                    .copied()
+                    .find(|&v| v * px_per_m >= 40.0)
+                    .unwrap_or(1.0)
+        };
+        let grid_m_x = adaptive_spacing(sx);
+        let grid_m_y = adaptive_spacing(sy);
         let vp = [rect.width(), rect.height()];
         let grid_stroke = egui::Stroke::new(0.5, egui::Color32::from_gray(45));
 
-        let world_left = self.cam2d.center[0] - vp[0] / (2.0 * s);
-        let world_right = self.cam2d.center[0] + vp[0] / (2.0 * s);
-        let world_top = self.cam2d.center[1] + vp[1] / (2.0 * s);
-        let world_bot = self.cam2d.center[1] - vp[1] / (2.0 * s);
+        let world_left = self.cam2d.center[0] - vp[0] / (2.0 * sx);
+        let world_right = self.cam2d.center[0] + vp[0] / (2.0 * sx);
+        let world_top = self.cam2d.center[1] + vp[1] / (2.0 * sy);
+        let world_bot = self.cam2d.center[1] - vp[1] / (2.0 * sy);
 
-        let gx0 = (world_left / grid_m).floor() as i32;
-        let gx1 = (world_right / grid_m).ceil() as i32;
+        let gx0 = (world_left / grid_m_x).floor() as i32;
+        let gx1 = (world_right / grid_m_x).ceil() as i32;
         for gx in gx0..=gx1 {
-            let wx = gx as f32 * grid_m;
-            let sx = self.cam2d.world_to_screen([wx, 0.0], vp)[0] + rect.left();
+            let wx = gx as f32 * grid_m_x;
+            let px = self.cam2d.world_to_screen([wx, 0.0], vp)[0] + rect.left();
             painter.line_segment(
-                [egui::pos2(sx, rect.top()), egui::pos2(sx, rect.bottom())],
+                [egui::pos2(px, rect.top()), egui::pos2(px, rect.bottom())],
                 grid_stroke,
             );
         }
-        let gy0 = (world_bot / grid_m).floor() as i32;
-        let gy1 = (world_top / grid_m).ceil() as i32;
+        let gy0 = (world_bot / grid_m_y).floor() as i32;
+        let gy1 = (world_top / grid_m_y).ceil() as i32;
         for gy in gy0..=gy1 {
-            let wy = gy as f32 * grid_m;
-            let sy = self.cam2d.world_to_screen([0.0, wy], vp)[1] + rect.top();
+            let wy = gy as f32 * grid_m_y;
+            let py = self.cam2d.world_to_screen([0.0, wy], vp)[1] + rect.top();
             painter.line_segment(
-                [egui::pos2(rect.left(), sy), egui::pos2(rect.right(), sy)],
+                [egui::pos2(rect.left(), py), egui::pos2(rect.right(), py)],
                 grid_stroke,
             );
         }
@@ -523,7 +536,7 @@ impl Viewer<'_> {
             rect.left_bottom() + egui::vec2(6.0, -18.0),
             egui::Align2::LEFT_BOTTOM,
             format!(
-                "grid {grid_m:.0} m   zoom {:.2} px/m   right-drag pan",
+                "grid scale: X={grid_m_x:.0} m, Y={grid_m_y:.0} m   zoom {:.2} px/m   right-drag pan",
                 self.cam2d.pixels_per_metre
             ),
             egui::FontId::monospace(11.0),
