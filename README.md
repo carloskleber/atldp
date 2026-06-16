@@ -58,7 +58,9 @@ with calculation reports aligned to national standards.
    convenient language, and validate against published results and existing
    open repositories.
 2. **Validated sag-tension core** — a headless engine for stage 4 (the technical
-   heart of the project).
+   heart of the project). *In progress* — see [`core/`](core/): inclined catenary,
+   change-of-state, ruling span, and a thin CLI, with a golden-case validation
+   suite.
 3. **Terrain, route & manual spotting** — stages 1–3, manual placement first.
 4. **Structure modeling & drafting** — stages 5–6.
 5. **Automatic spotting** — the cost-minimizing optimizer for stage 3.
@@ -74,17 +76,21 @@ rationale.
 ├── README.md
 ├── references.md           # Bibliography and related open-source projects
 ├── docs/
-│   ├── theory.tex/.pdf      # The sag-tension problem (math sketch)
+│   ├── theory.md            # The sag-tension problem (math sketch, 3D notes)
 │   ├── IMPLEMENTATION_PLAN.md
 │   └── adr/                 # Architecture Decision Records
+├── core/                    # Validated sag-tension engine (Phase 1, package `atldp`)
+│   ├── src/atldp/           # Pure headless core + thin CLI (ADR-0002)
+│   ├── tests/               # Unit tests
+│   └── validation/          # Golden cases citing their sources (ADR-0008)
 └── tests/                   # Throwaway prototypes, one folder per experiment
     └── terrain/             # 3D terrain navigation prototype (Plotly + DEM/API)
 ```
 
-During this phase, `tests/` holds prototype routines, in no particular language,
-used to evaluate the candidate models. Based on the results — and possibly
-external contributions — a proper software model will be chosen for
-implementation.
+The promoted, validated engine lives in [`core/`](core/) — see its
+[README](core/README.md). During this phase, `tests/` still holds throwaway
+prototype routines, in no particular language, used to evaluate candidate models;
+promotion into `core/` requires tests and validation.
 
 > **Note:** each prototype owns its own throwaway virtual environment, which must
 > **not** be committed. See ADR-0007 and the `.gitignore`.

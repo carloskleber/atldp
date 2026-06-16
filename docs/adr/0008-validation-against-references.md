@@ -1,6 +1,6 @@
 # ADR-0008 — Validate against published references
 
-- Status: Proposed
+- Status: Accepted (policy adopted; suite seeded in Phase 1, 2026-06-15)
 - Date: 2026-06-15
 
 ## Context

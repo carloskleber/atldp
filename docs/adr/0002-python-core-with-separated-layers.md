@@ -1,6 +1,6 @@
 # ADR-0002 — Python computational core with separated layers
 
-- Status: Proposed
+- Status: Accepted (implemented in Phase 1, 2026-06-15)
 - Date: 2026-06-15
 
 ## Context

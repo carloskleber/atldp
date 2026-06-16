@@ -38,7 +38,7 @@ The pipeline rests on these largely independent computational modules:
 | Module | Problem | Serves stage | Key references |
 | --- | --- | --- | --- |
 | **Conductor model** | thermal/elastic constitutive behavior, stress-strain (initial/final, creep) | 4 | Aluminum Association, CIGRE TB 324 |
-| **Sag-tension (single span)** | catenary / parabola, level & inclined supports | 4 | Irvine & Caughey 1974; theory.tex |
+| **Sag-tension (single span)** | catenary / parabola, level & inclined supports | 4 | Irvine & Caughey 1974; theory.md |
 | **Change-of-state** | equilibrium across temperature/load/creep states | 4 | CIGRE TB 601 |
 | **Ruling span** | multi-span section under varying conditions | 4 | IEEE/CIGRE practice |
 | **Uneven / inclined / dynamic spans** | FEM when ruling-span assumptions break | 4 | Bertrand 2020/2022; Sugiyama 2003 |
@@ -69,17 +69,36 @@ the validation oracle for everything else. Stages 1–3 and 5–6 wrap around it
 - ✅ Established the ADR log ([adr/](adr/)) and this plan as living documents;
   ADR-0007 is now **Accepted** as the implemented hygiene baseline.
 
-### Phase 1 — Validated sag-tension core — *pipeline stage 4*
+### Phase 1 — Validated sag-tension core — *pipeline stage 4* — 🚧 in progress (2026-06-15)
 
-- Implement the **single-span catenary** (exact) and **parabolic** approximation
-  with the span-to-depth-ratio switch documented in `theory.tex`.
-- Implement the **change-of-state equation** and a **ruling-span** section model.
-- Implement a **conductor library** (stress-strain, thermal coefficients, creep)
-  for at least one ACSR conductor.
-- **Validation:** reproduce results from the open repos in `references.md`
-  (e.g. `OnSag`, `SSTC`) and the `mpewsey` sag-tension worked example, plus a
-  published textbook/IEEE example. Golden tests, tolerance documented.
-- Output: a headless library with a thin CLI, no GUI.
+The headless core lives in [`core/`](../core/) (package `atldp`, ADR-0002 layout).
+
+- ✅ **3D-aware geometry** (`atldp.core.geometry`): attachment points in 3D,
+  reduced to horizontal distance + elevation difference. Sag-tension is usually
+  drawn in 2D but is really 3D — uneven spans and angle towers are the normal
+  case. Plan bearing is carried for angle-tower handling, and load-per-length is
+  a parameter so wind blow-out (Phase 2) slots in without rework. See the
+  expanded `theory.md`.
+- ✅ **Single-span catenary** (exact, **inclined/uneven** supports) and
+  **parabolic** approximation, with the span-to-depth-ratio / inclination switch
+  documented in `theory.md` (`atldp.core.catenary`).
+- ✅ **Change-of-state equation** (conserves the unstrained length; works on
+  inclined spans) and a **ruling-span** section model (`atldp.core.change_of_state`,
+  `atldp.core.ruling_span`).
+- ✅ **Conductor library** with ACSR Drake 26/7 — linear-elastic + thermal model
+  (`atldp.core.conductor`). ⏳ Full nonlinear stress-strain (initial/final) + creep
+  per CIGRE TB 324 is a documented later refinement of `Conductor.strain`.
+- ✅ Headless library with a thin **CLI** (`atldp`), no GUI (ADR-0006).
+- ✅ **Validation** (`core/validation/`, ADR-0008): closed-form catenary
+  identities and parabola↔catenary cross-method agreement are fully independent
+  oracles; change-of-state pins physics invariants (length conservation,
+  monotonicity, round-trip). ⏳ **Open item:** a third-party numeric cross-check
+  against `OnSag`/`SSTC` or a digitised textbook/IEEE table — the `mpewsey`
+  reference turned out to be algorithm-only (no numbers). Tracked in
+  `core/validation/README.md`.
+
+Remaining for Phase 1 close-out: the third-party numeric golden case and the
+nonlinear conductor stress-strain/creep refinement.
 
 ### Phase 2 — Loads, swing, clearances, ampacity — *pipeline stage 4*
 

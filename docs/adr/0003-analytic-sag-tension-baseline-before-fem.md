@@ -1,11 +1,11 @@
 # ADR-0003 — Analytic sag-tension baseline before FEM
 
-- Status: Proposed
+- Status: Accepted (implemented in Phase 1, 2026-06-15)
 - Date: 2026-06-15
 
 ## Context
 
-`theory.tex` lays out two modeling regimes: the **exact catenary** (required for
+`theory.md` lays out two modeling regimes: the **exact catenary** (required for
 span-to-depth ratio > 1/8 or inclined supports) and the **parabolic
 approximation** (valid for shallow sags with level supports). The references also
 point to a more general **finite-element** route (Bertrand 2020/2022; Sugiyama
