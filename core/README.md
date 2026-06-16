@@ -1,5 +1,13 @@
 # ATLDP core — sag-tension engine (Phase 1)
 
+> **Transitional oracle (2026-06-15).** Per [ADR-0011](../docs/adr/0011-rust-native-production-stack.md)
+> the production engine is now the Rust `atldp-core` crate; this Python core is
+> kept as the **validation oracle** the Rust port is checked against
+> ([ADR-0014](../docs/adr/0014-python-core-retirement-criteria.md)). The G1 port
+> already reproduces it (golden parity + an 882-case cross-check sweep, see
+> [validation/README.md](validation/README.md)); `core/` is retired only once the
+> still-open third-party numeric reference lands (ADR-0014 gate 3).
+
 The pure, headless engineering core mandated by [ADR-0002](../docs/adr/0002-python-core-with-separated-layers.md):
 no GUI, no network, no geospatial dependencies. It implements the analytic
 sag-tension baseline of [ADR-0003](../docs/adr/0003-analytic-sag-tension-baseline-before-fem.md)

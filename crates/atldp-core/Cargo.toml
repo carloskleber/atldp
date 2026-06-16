@@ -7,6 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# No I/O, no GPU, no in-tree deps — this crate is the validation target for the
-# Python `core/` oracle (ADR-0014). Numerics deps (nalgebra, roots) land in G1.
+# No I/O, no GPU, no deps — this crate is the validation target for the Python
+# `core/` oracle (ADR-0014), so its numerics are self-contained and auditable.
+# The catenary closed forms and the change-of-state root finder (bisection) are
+# implemented in-tree; no external numerics crate is needed at the G1 scope.
 [dependencies]

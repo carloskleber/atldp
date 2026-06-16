@@ -13,4 +13,5 @@ path = "src/main.rs"
 
 [dependencies]
 atldp-core.workspace = true
-# clap + the catenary/cos subcommands land in G1, mirroring the Python CLI.
+# Arg parsing is hand-rolled in src/main.rs (no clap) to keep the binary small
+# and dependency-free; the `catenary`/`cos` subcommands mirror the Python CLI.

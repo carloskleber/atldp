@@ -83,11 +83,18 @@ prototype to the shipping desktop CAD application; the original Python phases
   with the optimized release profile and Linux+Windows CI
   ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); `cargo fmt`, `clippy
   -D warnings`, and `cargo test` are green on the skeleton.
-- **G1 — Port & validate `atldp-core` (stage 4).** Reimplement geometry,
-  catenary, change-of-state, ruling span, and conductor in Rust; re-encode the
-  `core/validation/` golden cases as Rust tests; cross-check Rust vs. the Python
-  oracle over a parameter sweep, plus an independent third-party reference. Meeting
-  the ADR-0014 gate retires the Python `core/`.
+- **G1 — Port & validate `atldp-core` (stage 4). 🚧 in progress (2026-06-15).**
+  Geometry, catenary (inclined + parabola, regime switch), change-of-state,
+  ruling span, and conductor are reimplemented in Rust as a **dependency-free**
+  `atldp-core`, with the thin `atldp` CLI (`catenary`, `cos`) ported alongside.
+  ADR-0014's first two retirement gates are met: every `core/validation/` golden
+  case is re-encoded as an `atldp-core` test, and a **cross-check harness**
+  (`core/validation/export_reference.py` → committed CSV fixtures →
+  `crates/atldp-core/tests/cross_check_python_oracle.rs`) agrees with the Python
+  oracle to ≤1e-7 rel over an 882-case sweep. The **third gate — an independent
+  third-party numeric reference — is still open** (the same Phase-1 item in
+  `core/validation/README.md`), so the Python `core/` is **kept**, not yet
+  retired. Closing that reference completes the ADR-0014 gate and retires `core/`.
 - **G2 — Render foundation (ADR-0012).** winit + egui docked shell; wgpu 3D
   viewport with an orbit camera and a live catenary from the core; 2D ortho
   viewport (pan/zoom/grid/snap). **Prove the < 30 MB optimized build on Linux and
