@@ -1,7 +1,11 @@
 # ADR-0005 — Local DEM as geospatial source of truth
 
-- Status: Proposed
+- Status: Proposed (tooling refined by [ADR-0013](0013-pure-rust-geospatial-stack.md), 2026-06-15)
 - Date: 2026-06-15
+
+> **Note.** The principle below stands. The named tooling (`rasterio`/GDAL,
+> `pyproj`) reflected the Python stack; under ADR-0011 the implementation moves to
+> a pure-Rust geospatial stack — see ADR-0013.
 
 ## Context
 

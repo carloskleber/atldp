@@ -1,7 +1,12 @@
 # ADR-0006 — Headless-first; defer the GUI decision
 
-- Status: Proposed
+- Status: Resolved by [ADR-0012](0012-desktop-gui-wgpu-egui.md) (2026-06-15)
 - Date: 2026-06-15
+
+> **Resolved.** The deferred GUI decision is now made in ADR-0012 (native Rust
+> desktop app: winit + wgpu + egui), under the runtime stack of ADR-0011. The
+> headless-first principle held: the GUI sits in the presentation layer over a
+> separately validated core.
 
 ## Context
 

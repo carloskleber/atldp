@@ -1,7 +1,13 @@
 # ADR-0002 — Python computational core with separated layers
 
-- Status: Accepted (implemented in Phase 1, 2026-06-15)
+- Status: Superseded by [ADR-0011](0011-rust-native-production-stack.md) (2026-06-15)
 - Date: 2026-06-15
+
+> **Superseded.** Accepted and implemented in Phase 1 (the validated `core/`
+> engine). Superseded by ADR-0011, which moves the production stack to a native
+> Rust binary to meet the desktop app's performance and footprint requirements.
+> The layered separation decided here is preserved by ADR-0011; the Python `core/`
+> survives as a transitional validation oracle (ADR-0014).
 
 ## Context
 

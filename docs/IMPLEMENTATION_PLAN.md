@@ -4,6 +4,19 @@ This is a proposal. Nothing here is built yet. It translates the project's goals
 (see [README](../README.md)) into a phased, verifiable plan, and points to the
 architectural decisions that back it (see [adr/](adr/)).
 
+> **Substrate change (2026-06-15).** The product is a desktop CAD application with
+> interactive 2D/3D views (terrain, route, towers, conductors, **LiDAR point
+> clouds**), high rendering performance, and a small optimized binary (< 30 MB),
+> Linux-first then Windows. To meet that, the production stack moves from Python to
+> a **native Rust** Cargo workspace (ADR-0011), with a winit + wgpu + egui desktop
+> shell (ADR-0012) and a pure-Rust geospatial stack (ADR-0013). The **product
+> design is unchanged** — the staged pipeline and domain modules below still hold;
+> only the implementation language changes. The Python `core/` (Phase 1) is kept as
+> a **transitional validation oracle** and retired once the Rust core reproduces it
+> and an independent reference (ADR-0014). The build phases below are renamed to a
+> native track (Phase **G0–G6**); the original phase numbering is preserved in the
+> per-phase headings for traceability.
+
 ## Guiding principles
 
 1. **Validate before building.** Every numerical model must reproduce a published
@@ -56,6 +69,41 @@ The pipeline rests on these largely independent computational modules:
 The build order differs from the runtime pipeline order: the sag-tension core
 (stage 4) is built first because it is the highest-risk, highest-value piece and
 the validation oracle for everything else. Stages 1–3 and 5–6 wrap around it.
+
+### Native build track (Phases G0–G6)
+
+Per the substrate change above, the production app is built natively in Rust
+(ADR-0011/0012/0013). These phases carry the project from the validated Python
+prototype to the shipping desktop CAD application; the original Python phases
+(0–6) below remain as the model/spec the native track reproduces.
+
+- **G0 — ADRs + workspace skeleton — ✅ done (2026-06-15).** ADR-0011–0014
+  written; ADR-0002 superseded, ADR-0006 resolved, ADR-0005 tooling refined. A
+  Cargo workspace (`Cargo.toml`, `crates/atldp-{core,geo,model,render,app,cli}`)
+  with the optimized release profile and Linux+Windows CI
+  ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); `cargo fmt`, `clippy
+  -D warnings`, and `cargo test` are green on the skeleton.
+- **G1 — Port & validate `atldp-core` (stage 4).** Reimplement geometry,
+  catenary, change-of-state, ruling span, and conductor in Rust; re-encode the
+  `core/validation/` golden cases as Rust tests; cross-check Rust vs. the Python
+  oracle over a parameter sweep, plus an independent third-party reference. Meeting
+  the ADR-0014 gate retires the Python `core/`.
+- **G2 — Render foundation (ADR-0012).** winit + egui docked shell; wgpu 3D
+  viewport with an orbit camera and a live catenary from the core; 2D ortho
+  viewport (pan/zoom/grid/snap). **Prove the < 30 MB optimized build on Linux and
+  Windows here.**
+- **G3 — Terrain & route (stages 1–2).** `atldp-geo` DEM ingest + CRS + ground
+  profile (pure-Rust, ADR-0013); terrain mesh in 3D; route + POIs in 2D and 3D.
+- **G4 — LiDAR point-cloud engine (stage 1, advanced).** LAS/LAZ load, octree
+  LOD, GPU point renderer, picking — the highest-risk component, isolated.
+- **G5 — Manual spotting + sag-tension (stages 3–4 in-GUI).** Place towers on the
+  profile with live clearance/tension checks; conductors + swing in 3D.
+- **G6 — Structure modeling, drafting & file format (stages 5–6).** 2D plan &
+  profile sheets, reports, and `atldp-model` serialization as the open ATLDP
+  project format.
+
+The original (Python) phases below remain the validated specification the native
+track must reproduce.
 
 ### Phase 0 — Repository hygiene (prerequisite) — ✅ done (2026-06-15)
 
@@ -147,7 +195,11 @@ nonlinear conductor stress-strain/creep refinement.
 
 ## Open questions (to resolve via ADRs / discussion)
 
-- Final language & packaging for the production core (ADR-0002 proposes a default).
+- ~~Final language & packaging for the production core.~~ **Resolved:** native Rust
+  workspace, single optimized binary (ADR-0011).
+- ~~GUI/desktop vs. web delivery.~~ **Resolved:** native desktop CAD app, winit +
+  wgpu + egui (ADR-0012).
 - Whether to target interoperability with a specific commercial format, and the
-  legal footing for doing so.
-- GUI/desktop vs. web delivery (deferred until the core is proven — ADR-0006).
+  legal footing for doing so (addressed by the open ATLDP format in G6).
+- Maturity of the pure-Rust geospatial stack (`proj4rs` CRS coverage, `laz-rs`
+  decode speed) — validated in G3/G4, with a documented `gdal` fallback (ADR-0013).

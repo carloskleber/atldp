@@ -47,6 +47,11 @@ tests/**/*.html
 *.bbl
 *.blg
 
+# --- Rust build artifacts (native app; see ADR-0011) ---
+# Cargo.lock is committed (this is an application, not a library).
+/target/
+**/target/
+
 # --- OS / editor cruft ---
 .DS_Store
 Thumbs.db

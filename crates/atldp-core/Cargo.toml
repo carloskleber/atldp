@@ -1,0 +1,12 @@
+[package]
+name = "atldp-core"
+description = "Pure sag-tension numerics: geometry, catenary, change-of-state, ruling span, conductor (ADR-0011)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# No I/O, no GPU, no in-tree deps — this crate is the validation target for the
+# Python `core/` oracle (ADR-0014). Numerics deps (nalgebra, roots) land in G1.
+[dependencies]

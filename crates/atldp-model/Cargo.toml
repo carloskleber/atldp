@@ -1,0 +1,12 @@
+[package]
+name = "atldp-model"
+description = "Serializable project model: terrain, route, structures, conductors, weather cases, results + staleness (ADR-0009)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+atldp-core.workspace = true
+# serde + the open ATLDP file format land in G6.

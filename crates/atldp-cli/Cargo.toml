@@ -1,0 +1,16 @@
+[package]
+name = "atldp-cli"
+description = "Thin CLI over atldp-core for scripting and parity with the Python `atldp` CLI (ADR-0011)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "atldp"
+path = "src/main.rs"
+
+[dependencies]
+atldp-core.workspace = true
+# clap + the catenary/cos subcommands land in G1, mirroring the Python CLI.

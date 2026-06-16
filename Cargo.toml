@@ -1,0 +1,41 @@
+# ATLDP native production stack — Cargo workspace (ADR-0011).
+# Layered separation mirrors the headless-first design of ADR-0002:
+#   atldp-core  — pure numerics, no I/O, no GPU
+#   atldp-geo   — geospatial ingestion (DEM, CRS, LiDAR)  -> core
+#   atldp-model — serializable project model (ADR-0009)
+#   atldp-render— wgpu 2D+3D rendering (ADR-0012)          -> core
+#   atldp-app   — winit/egui desktop shell (the binary)    -> model, render, geo, core
+#   atldp-cli   — thin CLI for scripting parity            -> core
+[workspace]
+resolver = "2"
+members = [
+    "crates/atldp-core",
+    "crates/atldp-geo",
+    "crates/atldp-model",
+    "crates/atldp-render",
+    "crates/atldp-app",
+    "crates/atldp-cli",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.96"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/ck/atldp"
+
+[workspace.dependencies]
+# In-tree crates (path deps wired per the ADR-0011 dependency direction).
+atldp-core = { path = "crates/atldp-core" }
+atldp-geo = { path = "crates/atldp-geo" }
+atldp-model = { path = "crates/atldp-model" }
+atldp-render = { path = "crates/atldp-render" }
+# External deps are introduced in their phases (G1–G6), not in the G0 skeleton.
+
+# Optimized, self-contained binary — the < 30 MB target of ADR-0011.
+[profile.release]
+opt-level = 3        # numerics + rendering are hot; favour speed over size
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

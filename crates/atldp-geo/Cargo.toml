@@ -1,0 +1,13 @@
+[package]
+name = "atldp-geo"
+description = "Geospatial ingestion: DEM (GeoTIFF), CRS, ground profile, LiDAR LAS/LAZ — pure-Rust stack (ADR-0013)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+atldp-core.workspace = true
+# Pure-Rust geo stack (tiff/geotiff, proj4rs, las/laz-rs) lands in G3/G4.
+# Optional `gdal` fallback feature is documented in ADR-0013.

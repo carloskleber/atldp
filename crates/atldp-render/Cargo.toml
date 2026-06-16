@@ -1,0 +1,12 @@
+[package]
+name = "atldp-render"
+description = "wgpu rendering: shared 2D (ortho) + 3D engines, point-cloud LOD, picking (ADR-0012). No app/UI logic."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+atldp-core.workspace = true
+# wgpu + lyon + math crates land in G2 (foundation) and G4 (point-cloud LOD).

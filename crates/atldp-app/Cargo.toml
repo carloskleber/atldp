@@ -1,0 +1,19 @@
+[package]
+name = "atldp-app"
+description = "ATLDP desktop CAD shell: winit window, egui docked UI, command/undo stack (ADR-0012). The binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "atldp-app"
+path = "src/main.rs"
+
+[dependencies]
+atldp-core.workspace = true
+atldp-geo.workspace = true
+atldp-model.workspace = true
+atldp-render.workspace = true
+# winit + egui + egui-wgpu + egui_dock land in G2.
