@@ -38,12 +38,21 @@
 * CIGRE Technical Brochure 324 — Sag-tension calculation methods for overhead lines, 2007. (Change-of-state equation, experimental vs. predictor methods; see Standards.)
 * Catenary / change-of-state worked example: <https://mpewsey.github.io/2021/12/17/sag-tension-algorithm.html>
 
+## Conductor stress-strain and creep (high-temperature behaviour)
+
+* HARVEY, J. R.; LARSON, R. E. Use of Elevated-Temperature Creep Data in Sag-Tension Calculations. IEEE Transactions on Power Apparatus and Systems, v. PAS-89, n. 3, p. 380-386, 1970.
+* HARVEY, J. R.; LARSON, R. E. Creep equations of conductors for sag-tension calculations. IEEE Winter Power Meeting, paper C72 190-2, 1972.
+* CIGRE Working Group 22.05. Permanent elongation of conductors — predictor equations and evaluation methods. Electra, n. 75, p. 63-98, 1981.
+* BRADBURY, J.; DEY, P.; ORAWSKI, G.; PICKUP, K. H. Long-term-creep assessment for overhead-line conductors. Proceedings of the IEE, v. 122, n. 10, p. 1146-1152, 1975.
+* The Aluminum Association. A Method of Stress-Strain Testing of Aluminum Conductor and ACSR / Graphic Method for Sag-Tension Calculations (fourth-degree initial/final stress-strain polynomials A0–A4, B0–B4, C0–C4, D0–D4).
+* CIGRE Technical Brochure 324 — Sag-tension calculation methods for overhead lines, 2007 (experimental plastic elongation method; aluminium-steel load transfer and knee point; see Standards).
+
 ## Repos
 
 * SSTC — sag-tension calculation: <https://github.com/e-pear/SSTC>
 * GitHub topic index for sag-tension: <https://github.com/topics/sag-tension>
-* OnSag (Overhead Transmission Line Software): <https://github.com/OverheadTransmissionLineSoftware/OnSag>
+* OnSag (Overhead Transmission Line Software): <https://github.com/OverheadTransmissionLineSoftware/OnSag> — wxWidgets GUI for stringing/transit sag; consumes a precomputed tension table. Its numeric engine is OTLS-Models (below), which is what we cross-check against.
 * Transmission line simulation (MATLAB): <https://github.com/LukeYoung3000/Transmission_Line_Simulation_MATLAB>
 * Finding the sag in transmission lines: <https://github.com/MichaelRzadki/Finding-the-Sag-in-Transmission-Lines>
 * Maximum sag calculation: <https://github.com/Khwab-kalra/Maximum_Sag_calculation>
-* libwires / conductor library (Overhead Transmission Line Software): <https://github.com/OverheadTransmissionLineSoftware/Models>
+* libwires / conductor library (Overhead Transmission Line Software): <https://github.com/OverheadTransmissionLineSoftware/Models> — **adopted as the independent third-party numeric oracle** (ADR-0008/0014 gate 3): vendored as the `third_party/Models` submodule (@ `c270d48`); its `catenary_test.cc` numbers are cross-checked by `crates/atldp-core/tests/golden_otls_models.rs`. See `core/validation/oracles/README.md`.

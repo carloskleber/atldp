@@ -34,6 +34,19 @@ When all three are met, `core/` and its Python tooling are removed in a single
 commit that cites this ADR; the Rust golden cases and cross-reference fixtures
 remain as the permanent oracle.
 
+### Status update (2026-06-16) — all gates met
+
+Gate 3 is closed by **OTLS-Models**, vendored as the `third_party/Models`
+submodule (@ `c270d48`): the Rust catenary reproduces that library's own
+`catenary_test.cc` expectations (`crates/atldp-core/tests/golden_otls_models.rs`;
+provenance in `core/validation/oracles/README.md`). `OnSag` was the original
+candidate but is a wxWidgets GUI in imperial units that *consumes* a precomputed
+tension table — its actual numeric engine is OTLS-Models, which is the directly
+comparable, headless oracle. The reference pinned is the **model-independent
+catenary**; a change-of-state pin awaits the nonlinear conductor model (ADR-0003),
+but that is a refinement, not a retirement gate. With gates 1–3 met, the Python
+`core/` may now be removed in a commit citing this ADR.
+
 ## Consequences
 
 - Retirement is a verifiable gate, not a judgement call, and is auditable.

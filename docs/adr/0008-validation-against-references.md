@@ -30,3 +30,13 @@ must agree within tolerance. A tolerance regression is treated as a build failur
 - Up-front effort to curate reference cases and digitize expected values.
 - Some third-party results carry their own assumptions; each golden case
   documents the assumptions it was validated under.
+
+## Status (2026-06-16)
+
+The independent third-party reference is **OTLS-Models** (Overhead Transmission
+Line Software), vendored as the `third_party/Models` git submodule @ `c270d48` and
+digitised in `core/validation/oracles/README.md`. The Rust catenary reproduces its
+`catenary_test.cc` numbers (`crates/atldp-core/tests/golden_otls_models.rs`). The
+sibling `OnSag` project (a wxWidgets GUI consuming a precomputed tension table) was
+not used directly because OTLS-Models *is* its headless numeric engine and the
+directly comparable oracle. This closes ADR-0014 gate 3.

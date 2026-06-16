@@ -51,7 +51,7 @@ The pipeline rests on these largely independent computational modules:
 | Module | Problem | Serves stage | Key references |
 | --- | --- | --- | --- |
 | **Conductor model** | thermal/elastic constitutive behavior, stress-strain (initial/final, creep) | 4 | Aluminum Association, CIGRE TB 324 |
-| **Sag-tension (single span)** | catenary / parabola, level & inclined supports | 4 | Irvine & Caughey 1974; theory.md |
+| **Sag-tension (single span)** | catenary / parabola, level & inclined supports | 4 | Irvine & Caughey 1974; [theory.md](theory.md) |
 | **Change-of-state** | equilibrium across temperature/load/creep states | 4 | CIGRE TB 601 |
 | **Ruling span** | multi-span section under varying conditions | 4 | IEEE/CIGRE practice |
 | **Uneven / inclined / dynamic spans** | FEM when ruling-span assumptions break | 4 | Bertrand 2020/2022; Sugiyama 2003 |
@@ -87,14 +87,20 @@ prototype to the shipping desktop CAD application; the original Python phases
   Geometry, catenary (inclined + parabola, regime switch), change-of-state,
   ruling span, and conductor are reimplemented in Rust as a **dependency-free**
   `atldp-core`, with the thin `atldp` CLI (`catenary`, `cos`) ported alongside.
-  ADR-0014's first two retirement gates are met: every `core/validation/` golden
-  case is re-encoded as an `atldp-core` test, and a **cross-check harness**
-  (`core/validation/export_reference.py` → committed CSV fixtures →
-  `crates/atldp-core/tests/cross_check_python_oracle.rs`) agrees with the Python
-  oracle to ≤1e-7 rel over an 882-case sweep. The **third gate — an independent
-  third-party numeric reference — is still open** (the same Phase-1 item in
-  `core/validation/README.md`), so the Python `core/` is **kept**, not yet
-  retired. Closing that reference completes the ADR-0014 gate and retires `core/`.
+  **All three of ADR-0014's retirement gates are now met:** every
+  `core/validation/` golden case is re-encoded as an `atldp-core` test (gate 1); a
+  **cross-check harness** (`core/validation/export_reference.py` → committed CSV
+  fixtures → `crates/atldp-core/tests/cross_check_python_oracle.rs`) agrees with
+  the Python oracle to ≤1e-7 rel over an 882-case sweep (gate 2); and the Rust
+  catenary now reproduces an **independent third-party reference** —
+  **OTLS-Models** (`third_party/Models` submodule @ `c270d48`, its own
+  `catenary_test.cc` expectations) via `crates/atldp-core/tests/golden_otls_models.rs`
+  (gate 3, see `core/validation/oracles/README.md`). The Python `core/` is
+  therefore **eligible for retirement** per ADR-0014 (removable in a single
+  ADR-citing commit). `OnSag` was evaluated but is a wxWidgets GUI consuming a
+  precomputed tension table; OTLS-Models is its headless numeric engine and the
+  cleaner oracle. A *change-of-state* third-party pin remains a separate
+  refinement, blocked on the nonlinear conductor model (below), not on retirement.
 - **G2 — Render foundation (ADR-0012).** winit + egui docked shell; wgpu 3D
   viewport with an orbit camera and a live catenary from the core; 2D ortho
   viewport (pan/zoom/grid/snap). **Prove the < 30 MB optimized build on Linux and
@@ -147,13 +153,17 @@ The headless core lives in [`core/`](../core/) (package `atldp`, ADR-0002 layout
 - ✅ **Validation** (`core/validation/`, ADR-0008): closed-form catenary
   identities and parabola↔catenary cross-method agreement are fully independent
   oracles; change-of-state pins physics invariants (length conservation,
-  monotonicity, round-trip). ⏳ **Open item:** a third-party numeric cross-check
-  against `OnSag`/`SSTC` or a digitised textbook/IEEE table — the `mpewsey`
-  reference turned out to be algorithm-only (no numbers). Tracked in
-  `core/validation/README.md`.
+  monotonicity, round-trip). ✅ **Third-party numeric cross-check (closed
+  2026-06-16):** the Rust catenary matches **OTLS-Models** (`third_party/Models`
+  @ `c270d48`) to its 2-dp rounding — `golden_otls_models`, provenance in
+  `core/validation/oracles/README.md`. The `mpewsey` reference was algorithm-only
+  (no numbers); `OnSag` is a GUI consuming a tension table, and OTLS-Models is its
+  headless engine.
 
-Remaining for Phase 1 close-out: the third-party numeric golden case and the
-nonlinear conductor stress-strain/creep refinement.
+Remaining for Phase 1 close-out: the nonlinear conductor stress-strain/creep
+refinement. Completing it also unlocks a *change-of-state* third-party pin against
+OTLS-Models (its conductor model is nonlinear core/shell; ours is currently
+linear-elastic + thermal, so only the model-independent catenary is pinned today).
 
 ### Phase 2 — Loads, swing, clearances, ampacity — *pipeline stage 4*
 
