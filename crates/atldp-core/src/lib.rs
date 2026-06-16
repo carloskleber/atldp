@@ -9,7 +9,9 @@
 //! - [`catenary`]        — inclined/level catenary + parabolic approximation
 //! - [`change_of_state`] — equilibrium across temperature/load states
 //! - [`ruling_span`]     — equivalent-span section model
-//! - [`conductor`]       — linear-elastic + thermal constitutive model
+//! - [`conductor`]       — linear-elastic + thermal model, plus the nonlinear
+//!   bimetallic stress-strain model (G1b) used for the OTLS change-of-state
+//!   cross-check
 //!
 //! The crate has no external dependencies: it is the validation target for the
 //! Python oracle, so its numerics are self-contained and auditable.

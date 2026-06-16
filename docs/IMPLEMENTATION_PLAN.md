@@ -11,9 +11,15 @@ architectural decisions that back it (see [adr/](adr/)).
 > a **native Rust** Cargo workspace (ADR-0011), with a winit + wgpu + egui desktop
 > shell (ADR-0012) and a pure-Rust geospatial stack (ADR-0013). The **product
 > design is unchanged** — the staged pipeline and domain modules below still hold;
-> only the implementation language changes. The Python `core/` (Phase 1) is kept as
-> a **transitional validation oracle** and retired once the Rust core reproduces it
-> and an independent reference (ADR-0014). The build phases below are renamed to a
+> only the implementation language changes. The Python `core/` (Phase 1) was a
+> **transitional port scaffold, not an independently validated oracle**: its
+> closed-form catenary checks are genuine, but its change-of-state engineering
+> results were only pinned to self-consistency invariants, never to an outside
+> reference. **OTLS-Models is the de facto external validation reference**
+> (`third_party/Models`, ADR-0008/0014); gates 1–2 establish only Rust≡Python
+> *port fidelity*, so external trust rests on the OTLS cross-check (gate 3) plus
+> the closed-form identities. The Python `core/` is retired once that holds —
+> which it now does (ADR-0014). The build phases below are renamed to a
 > native track (Phase **G0–G6**); the original phase numbering is preserved in the
 > per-phase headings for traceability.
 
@@ -73,9 +79,11 @@ the validation oracle for everything else. Stages 1–3 and 5–6 wrap around it
 ### Native build track (Phases G0–G6)
 
 Per the substrate change above, the production app is built natively in Rust
-(ADR-0011/0012/0013). These phases carry the project from the validated Python
-prototype to the shipping desktop CAD application; the original Python phases
-(0–6) below remain as the model/spec the native track reproduces.
+(ADR-0011/0012/0013). These phases carry the project from the Python prototype to
+the shipping desktop CAD application; the original Python phases (0–6) below remain
+as the model/spec the native track reproduces — but the **de facto numerical
+reference is OTLS-Models**, not the Python core (which is self-consistent, never
+independently validated; see G1 and the validation strategy).
 
 - **G0 — ADRs + workspace skeleton — ✅ done (2026-06-15).** ADR-0011–0014
   written; ADR-0002 superseded, ADR-0006 resolved, ADR-0005 tooling refined. A
@@ -83,7 +91,7 @@ prototype to the shipping desktop CAD application; the original Python phases
   with the optimized release profile and Linux+Windows CI
   ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); `cargo fmt`, `clippy
   -D warnings`, and `cargo test` are green on the skeleton.
-- **G1 — Port & validate `atldp-core` (stage 4). 🚧 in progress (2026-06-15).**
+- **G1 — Port & validate `atldp-core` (stage 4). ✅ done (2026-06-16).**
   Geometry, catenary (inclined + parabola, regime switch), change-of-state,
   ruling span, and conductor are reimplemented in Rust as a **dependency-free**
   `atldp-core`, with the thin `atldp` CLI (`catenary`, `cos`) ported alongside.
@@ -99,8 +107,29 @@ prototype to the shipping desktop CAD application; the original Python phases
   therefore **eligible for retirement** per ADR-0014 (removable in a single
   ADR-citing commit). `OnSag` was evaluated but is a wxWidgets GUI consuming a
   precomputed tension table; OTLS-Models is its headless numeric engine and the
-  cleaner oracle. A *change-of-state* third-party pin remains a separate
-  refinement, blocked on the nonlinear conductor model (below), not on retirement.
+  cleaner oracle. The *change-of-state* third-party pin that was outstanding here
+  is now delivered by G1b below.
+- **G1b — Nonlinear cable (conductor) model. ✅ done (2026-06-16).** Added an
+  **independent nonlinear bimetallic stress-strain model**
+  (`atldp_core::conductor::StressStrainModel`): the composite load-strain curve is
+  the sum of the steel-core and aluminium-shell **load-strain (and creep)
+  polynomials** (Aluminum Association handbook / CIGRE TB 324), inverted directly,
+  with **per-material thermal strains** — the bimetallic effect a single modulus
+  can't capture. It attaches to a `Conductor` (`stress_strain` field) and
+  `Conductor::strain` then uses it with **no change to callers** (the
+  change-of-state equation is untouched; ADR-0003). **Crucially it is derived from
+  the stress-strain physics, not transcribed from OTLS's elongation/region/stretch
+  code** — only the published physical Drake polynomial data is shared, so the
+  cross-check is a validation, not a tautology. Driven through this crate's own
+  length-conserving `change_of_state`, it reproduces OTLS-Models'
+  `catenary_cable_reloader` reload tensions (6788 / 4701 / 17123 lbf reference
+  cases) to **≤ 0.2 %** — the bounded gap traces to legitimate convention
+  differences (horizontal vs. average tension; continuous polynomial vs. piecewise
+  regions), recorded in `core/validation/oracles/README.md` and pinned by
+  `crates/atldp-core/tests/golden_otls_change_of_state.rs`. This **closes the
+  change-of-state validation gap** Phase 1 left open. (Creep polynomials and the
+  initial/final distinction are in the model; the after-creep and prior-stretch
+  reload cases are a later refinement, not a blocker.)
 - **G2 — Render foundation (ADR-0012).** winit + egui docked shell; wgpu 3D
   viewport with an orbit camera and a live catenary from the core; 2D ortho
   viewport (pan/zoom/grid/snap). **Prove the < 30 MB optimized build on Linux and
@@ -147,23 +176,26 @@ The headless core lives in [`core/`](../core/) (package `atldp`, ADR-0002 layout
   inclined spans) and a **ruling-span** section model (`atldp.core.change_of_state`,
   `atldp.core.ruling_span`).
 - ✅ **Conductor library** with ACSR Drake 26/7 — linear-elastic + thermal model
-  (`atldp.core.conductor`). ⏳ Full nonlinear stress-strain (initial/final) + creep
-  per CIGRE TB 324 is a documented later refinement of `Conductor.strain`.
+  (`atldp.core.conductor`), plus the ✅ **nonlinear bimetallic stress-strain
+  model** (initial/final + creep polynomials, per-material thermal; **G1b** above)
+  that gates and now delivers the OTLS change-of-state cross-check.
 - ✅ Headless library with a thin **CLI** (`atldp`), no GUI (ADR-0006).
 - ✅ **Validation** (`core/validation/`, ADR-0008): closed-form catenary
   identities and parabola↔catenary cross-method agreement are fully independent
   oracles; change-of-state pins physics invariants (length conservation,
   monotonicity, round-trip). ✅ **Third-party numeric cross-check (closed
   2026-06-16):** the Rust catenary matches **OTLS-Models** (`third_party/Models`
-  @ `c270d48`) to its 2-dp rounding — `golden_otls_models`, provenance in
+  @ `c270d48`) to its 2-dp rounding (`golden_otls_models`), and the **nonlinear**
+  change-of-state matches its reloader tensions to ≤ 0.2 %
+  (`golden_otls_change_of_state`, G1b) — provenance in
   `core/validation/oracles/README.md`. The `mpewsey` reference was algorithm-only
   (no numbers); `OnSag` is a GUI consuming a tension table, and OTLS-Models is its
   headless engine.
 
-Remaining for Phase 1 close-out: the nonlinear conductor stress-strain/creep
-refinement. Completing it also unlocks a *change-of-state* third-party pin against
-OTLS-Models (its conductor model is nonlinear core/shell; ours is currently
-linear-elastic + thermal, so only the model-independent catenary is pinned today).
+Phase 1 is closed out: the **nonlinear conductor stress-strain/creep model (G1b)**
+landed, and with it the *change-of-state* third-party pin against OTLS-Models — the
+catenary and the change-of-state are both now cross-checked against an independent
+reference (`golden_otls_models`, `golden_otls_change_of_state`).
 
 ### Phase 2 — Loads, swing, clearances, ampacity — *pipeline stage 4*
 
@@ -206,7 +238,17 @@ linear-elastic + thermal, so only the model-independent catenary is pinned today
 
 ## Validation strategy
 
-- A `validation/` suite of **golden cases**, each citing its source.
+- **OTLS-Models is the de facto external reference** for the sag-tension core
+  (`third_party/Models` submodule, ADR-0008/0014): both the catenary
+  (`golden_otls_models`) and the nonlinear change-of-state
+  (`golden_otls_change_of_state`, ≤ 0.2 %) are cross-checked against it. The
+  independent nonlinear conductor model (G1b) is what makes the change-of-state
+  comparison a validation rather than a transcription. The Python `core/` is
+  **not** an independent oracle
+  — it was only self-consistent (closed-form identities + invariants), so the
+  Rust↔Python gates prove port fidelity, not correctness.
+- A `validation/` suite of **golden cases**, each citing its source; the
+  closed-form catenary identities (Irvine) are a second independent oracle.
 - Cross-check the analytic core against the FEM track in their common domain.
 - Track tolerances explicitly; treat a tolerance regression as a build failure.
 

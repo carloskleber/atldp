@@ -53,15 +53,40 @@ build (ADR-0008). No C++ is built in CI — the numbers above are the committed,
 auditable digitised reference, and they are independently re-derivable from the
 closed-form catenary identities in [`docs/theory.md`](../../../docs/theory.md).
 
-## What is *not* pinned — change-of-state
+## Change-of-state — now pinned via the nonlinear conductor (G1b)
 
 OTLS models the ACSR Drake conductor with a **full nonlinear two-component
-(core/shell) load-strain + creep polynomial** model (`test/factory.cc`), whereas
-the Phase-1 `atldp-core` conductor is **linear-elastic + thermal** (single
-modulus, ADR-0003). Their change-of-state reload tensions (e.g.
-`line_cable_reloader_test.cc`: H = 6000 → 5561 / 4701 / 17123 lbf across weather
-cases) therefore differ from ours by the constitutive-model gap, not by a bug, so
-pinning them would be misleading. The change-of-state machinery stays validated by
-its physics invariants and the Rust↔Python sweep (gates 1–2). A tight third-party
-change-of-state pin is deferred to the nonlinear conductor refinement already
-tracked in [`../README.md`](../README.md) — this oracle sharpens its priority.
+(core/shell) load-strain + creep polynomial** model (`test/factory.cc`). The
+Phase-1 `atldp-core` conductor was **linear-elastic + thermal** (single modulus,
+ADR-0003), so its reload tensions could not match OTLS — only the
+model-independent catenary was pinned.
+
+G1b adds an **independent nonlinear bimetallic stress-strain model**
+(`atldp_core::conductor::StressStrainModel`): the composite curve is the sum of
+the steel-core and aluminium-shell load-strain polynomials, inverted directly,
+with per-material thermal strains (the bimetallic effect). It is **derived from
+the stress-strain physics, not transcribed from OTLS's elongation/region/stretch
+classes** — only the published *physical* Drake polynomial data is shared. That
+independence is what makes the comparison below a validation rather than a copy.
+
+Run through this crate's own length-conserving `change_of_state` (horizontal
+tension, exact catenary) in OTLS's consistent US units (span 1200 ft, w = 1.094
+lbf/ft, reference H = 6000 lbf at 60 °F):
+
+| Reload case | OTLS expected | `atldp-core` | rel. err |
+| --- | --- | --- | --- |
+| 60 °F → 0 °F, bare | 6788 | 6787 | ~1e-4 |
+| 60 °F → 212 °F, bare | 4701 | 4702 | ~2e-4 |
+| 60 °F → 0 °F, 0.5″ ice + 8 psf wind (resultant w = √(2.072²+3.729²)) | 17123 | 17146 | ~1.3e-3 |
+
+Source: `test/sagtension/catenary_cable_reloader_test.cc` at the pinned commit
+(the no-stretch reference→reload cases). Agreement is to ≤ 0.2 %, not bit-identity:
+OTLS reloads on the **average** tension with a piecewise region model and explicit
+stretch, while we use the **horizontal** tension and a continuous polynomial, so a
+small bounded difference is expected and is itself evidence of independence.
+
+Encoded as the Rust golden test
+[`crates/atldp-core/tests/golden_otls_change_of_state.rs`](../../../crates/atldp-core/tests/golden_otls_change_of_state.rs),
+which asserts the ≤ 0.2 % agreement and additionally regression-pins our own
+computed tensions. A drift there fails the build (ADR-0008). This closes the
+change-of-state validation gap that Phase 1 left open.
