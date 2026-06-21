@@ -14,7 +14,8 @@
 * IEEE Std 1283 — IEEE Guide for Determining the Effects of High-Temperature Operation on Conductors, Connectors, and Accessories.
 * CIGRE Technical Brochure 601 — Guide for thermal rating calculations of overhead lines, 2014.
 * CIGRE Technical Brochure 324 — Sag-tension calculation methods for overhead lines, 2007. (Conductor stress-strain and creep behavior.)
-* IEC 60826 — Design criteria of overhead transmission lines.
+* IEC 60826 — Design criteria of overhead transmission lines (load cases: extreme wind, construction, broken-wire/unbalanced longitudinal).
+* IEEE Std 524 — IEEE Guide for the Installation of Overhead Transmission Line Conductors (stringing/sagging practice; field stringing tables).
 * ABNT NBR 5422 — Projeto de linhas aéreas de transmissão de energia elétrica (Brazilian standard: loads, wind, clearances, right-of-way).
 * The Aluminum Association. Sag and Tension Calculation Methods for Overhead Transmission Lines (Aluminum Electrical Conductor Handbook).
 * EPRI. Transmission Line Reference Book — 200 kV and Above ("Red Book") and Wind-Induced Conductor Motion ("Orange Book").

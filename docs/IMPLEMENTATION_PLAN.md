@@ -1,56 +1,47 @@
 # ATLDP — Implementation Plan
 
-This is a proposal. Nothing here is built yet. It translates the project's goals
-(see [README](../README.md)) into a phased, verifiable plan, and points to the
-architectural decisions that back it (see [adr/](adr/)).
+This translates the project's goals (see [README](../README.md)) into a phased,
+verifiable plan, and points to the architectural decisions that back it (see
+[adr/](adr/)). It is a living document: phases **G0–G6 are delivered**, phases
+**G7–G11** are the next traced steps (ADR-0015–0018).
 
-> **Substrate change (2026-06-15).** The product is a desktop CAD application with
-> interactive 2D/3D views (terrain, route, towers, conductors, **LiDAR point
-> clouds**), high rendering performance, and a small optimized binary (< 30 MB),
-> Linux-first then Windows. To meet that, the production stack moves from Python to
-> a **native Rust** Cargo workspace (ADR-0011), with a winit + wgpu + egui desktop
-> shell (ADR-0012) and a pure-Rust geospatial stack (ADR-0013). The **product
-> design is unchanged** — the staged pipeline and domain modules below still hold;
-> only the implementation language changes. The Python `core/` (Phase 1) was a
-> **transitional port scaffold, not an independently validated oracle**: its
-> closed-form catenary checks are genuine, but its change-of-state engineering
-> results were only pinned to self-consistency invariants, never to an outside
-> reference. **OTLS-Models is the de facto external validation reference**
-> (`third_party/Models`, ADR-0008/0014); gates 1–2 establish only Rust≡Python
-> *port fidelity*, so external trust rests on the OTLS cross-check (gate 3) plus
-> the closed-form identities. The Python `core/` is retired once that holds —
-> which it now does, and the Python `core/` has been **removed** (ADR-0014); its
-> golden cases and cross-check fixtures live on in the Rust test tree
-> (`crates/atldp-core/tests/`). The build phases below are renamed to a native
-> track (Phase **G0–G6**, now complete); the original phase numbering is preserved
-> in the per-phase headings for traceability.
+> **Substrate (2026-06-15).** The product is a desktop CAD application — interactive
+> 2D/3D views (terrain, route, towers, conductors, LiDAR point clouds), high
+> rendering performance, and a small optimized binary (< 30 MB), Linux-first then
+> Windows. The production stack is a **native Rust** Cargo workspace (ADR-0011) with
+> a winit + wgpu + egui shell (ADR-0012) and a pure-Rust geospatial stack
+> (ADR-0013). The staged pipeline and domain modules below are unchanged from the
+> original Python design; only the implementation language moved. The Python `core/`
+> was a transitional port scaffold — self-consistent but never an independent oracle
+> — and has been **removed** (ADR-0014); its golden cases and cross-check fixtures
+> live on in the Rust test tree (`crates/atldp-core/tests/`). The **de facto external
+> numerical reference is OTLS-Models** (`third_party/Models`, ADR-0008).
 
 ## Guiding principles
 
-1. **Validate before building.** Every numerical model must reproduce a published
-   or independently-computed reference result before it is trusted.
+1. **Validate before building.** Every numerical model must reproduce a published or
+   independently-computed reference before it is trusted.
 2. **Separate the core from everything else.** A pure, headless, well-tested
    computational engine — no GUI, no I/O, no geospatial dependencies in it.
-3. **Standards are first-class.** Criteria from IEEE / CIGRE / ABNT are encoded
-   explicitly and cited, not hard-coded as magic numbers.
-4. **Throwaway prototypes are fine.** `tests/` stays a sandbox; promotion to the
-   core requires tests and validation.
+3. **Standards are first-class.** Criteria from IEC / IEEE / CIGRE / ABNT are encoded
+   explicitly and cited, not hard-coded as magic numbers (ADR-0004).
+4. **Throwaway prototypes are fine.** `tests/` stays a sandbox; promotion to the core
+   requires tests and validation.
 
 ## The design pipeline (product workflow)
 
-ATLDP executes a transmission-line project as a staged pipeline; each stage
-consumes the previous stage's output and adds to a shared project model
-(ADR-0009). This is the *runtime* order of a project — distinct from the *build*
-order of the phases below.
+ATLDP executes a transmission-line project as a staged pipeline; each stage consumes
+the previous stage's output and adds to a shared project model (ADR-0009). This is
+the *runtime* order of a project — distinct from the *build* order of the phases.
 
 | # | Stage | Input → Output | Notes |
 | --- | --- | --- | --- |
-| 1 | **Terrain model** | public DEM / LiDAR → 3D ground+feature model | DEM first, professional LiDAR point clouds later |
+| 1 | **Terrain model** | public DEM / LiDAR → 3D ground+feature model | coarse wide-area tier + interpolated ~1 m right-of-way corridor (ADR-0018, G10) |
 | 2 | **Line route** | terrain + POIs → georeferenced route | angle points, crossings, obstacles, constraints |
-| 3 | **Tower placement (spotting)** | route + structure library → spotted structures | manual first; automatic cost-minimizing optimizer later |
-| 4 | **Sag-tension** | spans + conductors + weather → sags, tensions, clearances | swing/blowout; tension limits; wire-ground & phase-phase clearances |
-| 5 | **Structure modeling** | spotted structures + spans → load checks | wind/weight span, guyed towers, simple lattice model |
-| 6 | **Plan & profile drafting** | full project model → sheets & reports | drawings + calculation reports |
+| 3 | **Tower placement (spotting)** | route + structure library → spotted, typed structures | suspension vs anchor typing → **tension sections** (ADR-0015); structures chosen from **families** by application chart (ADR-0016); manual first, auto later |
+| 4 | **Sag-tension** | sections + **wire set** + load cases → sags, tensions, clearances | per-section ruling span; **every wire** (3 phases/circuit + shield) at its own tension; swing/blowout; wire-ground & phase-phase clearances |
+| 5 | **Structure modeling** | spotted structures + spans + load cases → load checks | wind/weight/longitudinal span loads vs the family's rating; **IEC 60826** cases (ADR-0017) |
+| 6 | **Plan & profile drafting** | full project model → sheets & reports | drawings, calculation reports, and the field **stringing table** (G11) |
 
 ## Domain decomposition
 
@@ -61,258 +52,143 @@ The pipeline rests on these largely independent computational modules:
 | **Conductor model** | thermal/elastic constitutive behavior, stress-strain (initial/final, creep) | 4 | Aluminum Association, CIGRE TB 324 |
 | **Sag-tension (single span)** | catenary / parabola, level & inclined supports | 4 | Irvine & Caughey 1974; [theory.md](theory.md) |
 | **Change-of-state** | equilibrium across temperature/load/creep states | 4 | CIGRE TB 601 |
-| **Ruling span** | multi-span section under varying conditions | 4 | IEEE/CIGRE practice |
+| **Ruling span & tension sections** | multi-span section between anchors; per-section traction | 3, 4 | IEEE/CIGRE practice; ADR-0015 |
+| **Multi-wire set** | phases (3·circuits) + shield wires, each own tension/load; lowest-wire clearance | 4 | ADR-0015 |
 | **Uneven / inclined / dynamic spans** | FEM when ruling-span assumptions break | 4 | Bertrand 2020/2022; Sugiyama 2003 |
-| **Weather & loads** | wind/ice load cases, conductor swing/blowout | 4, 5 | ABNT NBR 5422; IEC 60826 |
+| **Weather, loads & load cases** | wind/ice cases, swing/blowout, IEC 60826 case set (extreme wind, construction, broken wire) | 4, 5 | IEC 60826; ABNT NBR 5422; ADR-0017 |
 | **Thermal rating** | ampacity vs. conductor temperature | 4 | IEEE 738; CIGRE TB 601 |
-| **Geospatial** | DEM/LiDAR ingestion, ground profile, CRS handling | 1, 2 | rasterio/GDAL, pyproj, PDAL |
+| **Geospatial** | DEM/LiDAR ingestion; coarse map + interpolated ~1 m corridor profile; CRS | 1, 2 | tiff/geotiff, proj4rs, las/laz; ADR-0018 |
 | **Routing & POIs** | route geometry over terrain | 2 | — |
-| **Spotting** | structure placement; cost-minimizing optimization | 3 | NBR 5422 clearances |
+| **Structure library** | families, effective height, application (wind/weight-span) chart | 3, 5 | ADR-0016 |
+| **Spotting** | structure placement & family selection; cost-minimizing optimization | 3 | ADR-0010/0016; NBR 5422 clearances |
 | **Clearances** | ground/RoW and phase-phase clearance checks | 3, 4 | NBR 5422 |
-| **Structure model** | wind/weight span, lattice & guyed-tower load checks | 5 | NBR 5422; IEC 60826 |
-| **Drafting & reporting** | plan & profile sheets, calculation reports | 6 | — |
+| **Structure model** | wind/weight/longitudinal span loads, lattice & guyed-tower checks | 5 | IEC 60826; NBR 5422 |
+| **Drafting, reporting & stringing table** | plan & profile sheets, calculation reports, field stringing chart | 6 | IEEE 524; ADR-0009 |
 
-## Phases
+## Delivered — native build track (Phases G0–G6, complete)
 
-The build order differs from the runtime pipeline order: the sag-tension core
-(stage 4) is built first because it is the highest-risk, highest-value piece and
-the validation oracle for everything else. Stages 1–3 and 5–6 wrap around it.
+The production app is built natively in Rust (ADR-0011/0012/0013). The sag-tension
+core (stage 4) was built first — highest risk, highest value, and the validation
+oracle for everything else — with stages 1–3 and 5–6 wrapped around it. Full
+blow-by-blow validation lineage lives in
+[`crates/atldp-core/tests/ORACLES.md`](../crates/atldp-core/tests/ORACLES.md); the
+summary:
 
-### Native build track (Phases G0–G6)
+| Phase | Delivered | Date |
+| --- | --- | --- |
+| **G0** | ADRs 0011–0014 + Cargo workspace skeleton (`crates/atldp-{core,geo,model,render,app,cli}`), optimized release profile, Linux+Windows CI; fmt/clippy/test green. | 2026-06-15 |
+| **G1** | Dependency-free `atldp-core` (stage 4): geometry, inclined catenary + parabola, change-of-state, ruling span, conductor; thin `atldp` CLI. Cross-checked against the Python oracle (≤1e-7 over 882 cases) **and** the independent **OTLS-Models** reference (`golden_otls_models`). | 2026-06-16 |
+| **G1b** | Independent nonlinear bimetallic stress-strain/creep conductor model (`conductor::StressStrainModel`, Aluminum Assoc. / CIGRE TB 324). Reproduces OTLS reloader tensions to ≤0.2 % (`golden_otls_change_of_state`) — closes the change-of-state validation gap. | 2026-06-16 |
+| **G2** | Render foundation (ADR-0012): winit + egui docked shell, wgpu 3D orbit viewport with live catenary, 2D ortho viewport. **12 MB stripped** (< 30 MB gate ✅). | 2026-06-16 |
+| **G3** | Terrain & route (stages 1–2): `atldp-geo` DEM ingest + CRS + ground profile (pure-Rust); 3D terrain wireframe, 2D profile, camera auto-fit. | 2026-06-16 |
+| **G4** | LiDAR point-cloud engine (stage 1, advanced) — **⏸ postponed** until a surveyed dataset is available to validate against. | — |
+| **G5** | Manual spotting + in-GUI sag-tension (stages 3–4): click-to-place towers, live catenary, colour-coded ground-clearance check, tower/span tables. | 2026-06-16 |
+| **G6** | Structure loads (`core::structure`: signed wind/weight spans + conductor loads), the open versioned-JSON **`.atldp`** format (`atldp-model`), and drafting (Markdown `report` + SVG plan-&-profile `sheet`) from one shared `analysis` pass. | 2026-06-20 |
 
-Per the substrate change above, the production app is built natively in Rust
-(ADR-0011/0012/0013). These phases carry the project from the Python prototype to
-the shipping desktop CAD application; the original Python phases (0–6) below remain
-as the model/spec the native track reproduces — but the **de facto numerical
-reference is OTLS-Models**, not the Python core (which is self-consistent, never
-independently validated; see G1 and the validation strategy).
+These phases deliver a working **single-conductor, single-tension** line tool. The
+phases below grow it into a real multi-wire, multi-section project tool.
 
-- **G0 — ADRs + workspace skeleton — ✅ done (2026-06-15).** ADR-0011–0014
-  written; ADR-0002 superseded, ADR-0006 resolved, ADR-0005 tooling refined. A
-  Cargo workspace (`Cargo.toml`, `crates/atldp-{core,geo,model,render,app,cli}`)
-  with the optimized release profile and Linux+Windows CI
-  ([.github/workflows/ci.yml](../.github/workflows/ci.yml)); `cargo fmt`, `clippy
-  -D warnings`, and `cargo test` are green on the skeleton.
-- **G1 — Port & validate `atldp-core` (stage 4). ✅ done (2026-06-16).**
-  Geometry, catenary (inclined + parabola, regime switch), change-of-state,
-  ruling span, and conductor are reimplemented in Rust as a **dependency-free**
-  `atldp-core`, with the thin `atldp` CLI (`catenary`, `cos`) ported alongside.
-  **All three of ADR-0014's retirement gates are now met:** every
-  (former) `core/validation/` golden case is re-encoded as an `atldp-core` test
-  (gate 1); a **cross-check harness** (the former `core/validation/export_reference.py`
-  → committed CSV fixtures → `crates/atldp-core/tests/cross_check_python_oracle.rs`) agrees with
-  the Python oracle to ≤1e-7 rel over an 882-case sweep (gate 2); and the Rust
-  catenary now reproduces an **independent third-party reference** —
-  **OTLS-Models** (`third_party/Models` submodule @ `c270d48`, its own
-  `catenary_test.cc` expectations) via `crates/atldp-core/tests/golden_otls_models.rs`
-  (gate 3, see `crates/atldp-core/tests/ORACLES.md`). The Python `core/` is
-  therefore **eligible for retirement** per ADR-0014 (removable in a single
-  ADR-citing commit). `OnSag` was evaluated but is a wxWidgets GUI consuming a
-  precomputed tension table; OTLS-Models is its headless numeric engine and the
-  cleaner oracle. The *change-of-state* third-party pin that was outstanding here
-  is now delivered by G1b below.
-- **G1b — Nonlinear cable (conductor) model. ✅ done (2026-06-16).** Added an
-  **independent nonlinear bimetallic stress-strain model**
-  (`atldp_core::conductor::StressStrainModel`): the composite load-strain curve is
-  the sum of the steel-core and aluminium-shell **load-strain (and creep)
-  polynomials** (Aluminum Association handbook / CIGRE TB 324), inverted directly,
-  with **per-material thermal strains** — the bimetallic effect a single modulus
-  can't capture. It attaches to a `Conductor` (`stress_strain` field) and
-  `Conductor::strain` then uses it with **no change to callers** (the
-  change-of-state equation is untouched; ADR-0003). **Crucially it is derived from
-  the stress-strain physics, not transcribed from OTLS's elongation/region/stretch
-  code** — only the published physical Drake polynomial data is shared, so the
-  cross-check is a validation, not a tautology. Driven through this crate's own
-  length-conserving `change_of_state`, it reproduces OTLS-Models'
-  `catenary_cable_reloader` reload tensions (6788 / 4701 / 17123 lbf reference
-  cases) to **≤ 0.2 %** — the bounded gap traces to legitimate convention
-  differences (horizontal vs. average tension; continuous polynomial vs. piecewise
-  regions), recorded in `crates/atldp-core/tests/ORACLES.md` and pinned by
-  `crates/atldp-core/tests/golden_otls_change_of_state.rs`. This **closes the
-  change-of-state validation gap** Phase 1 left open. (Creep polynomials and the
-  initial/final distinction are in the model; the after-creep and prior-stretch
-  reload cases are a later refinement, not a blocker.)
-- **G2 — Render foundation (ADR-0012). ✅ done (2026-06-16).** winit + egui docked
-  shell; wgpu 3D viewport with orbit camera (left-drag rotate, scroll zoom) and a
-  live LINE_STRIP catenary from `atldp-core`; 2D ortho viewport (right-drag pan,
-  scroll zoom, adaptive grid). Stack: winit 0.30 (`ApplicationHandler`), egui
-  0.34.3, egui_dock 0.19, wgpu 29.0.3 (Vulkan/DX12/Metal), WGSL shader embedded in
-  binary. Binary size: **12 MB stripped on Linux** (< 30 MB gate ✅). Toolbar
-  DragValues for span and horizontal tension drive the catenary in real time; sag is
-  displayed live. wgpu 29 API migration: `InstanceDescriptor::new_without_display_handle`,
-  `RenderPass::forget_lifetime`, `CurrentSurfaceTexture` enum (replacing
-  `Result<SurfaceTexture, SurfaceError>`), `immediate_size` / `multiview_mask` /
-  `depth_slice` fields.
-- **G3 — Terrain & route (stages 1–2). ✅ done (2026-06-16).** `atldp-geo` DEM
-  ingest + CRS + ground profile (pure-Rust, ADR-0013); terrain wireframe in the 3D
-  orbit viewport; terrain profile + elevation annotations in the 2D panel; camera
-  auto-fit to terrain extents on load; `ATLDP_TERRAIN` env-var or default tile path.
-- **G4 — LiDAR point-cloud engine (stage 1, advanced). ⏸ postponed.** LAS/LAZ load,
-  octree LOD, GPU point renderer, picking — the highest-risk component, isolated.
-  Deferred until a surveyed LiDAR dataset is available to validate against.
-- **G5 — Manual spotting + sag-tension (stages 3–4 in-GUI). ✅ done (2026-06-16).**
-  Click-to-place tower spotting in the 2D terrain profile; live catenary between
-  consecutive towers (`atldp-core` catenary, ACSR Drake weight); ground-clearance
-  check with colour-coded violation highlights (cyan = OK, red = violation) in both
-  2D and 3D; right-side panel with tower table and span table (horizontal span, sag,
-  min clearance per span); toolbar controls for attachment height, minimum clearance,
-  horizontal tension, vertical exaggeration, Undo / Clear; worst-clearance indicator
-  in the toolbar; tower + conductor geometry in the 3D viewport via the
-  `SpottingLines` LINE_LIST wgpu renderer (`atldp-render::spotting_lines`).
-- **G6 — Structure modeling, drafting & file format (stages 5–6). ✅ done (2026-06-20).**
-  - **Structure modeling (stage 5):** `atldp_core::structure` computes per-support
-    **wind span** (half-sum of adjacent horizontal spans) and **weight span**
-    (distance between adjacent catenary low points, *signed* so summit uplift
-    shows as a negative span), and the transverse (wind-pressure × diameter ×
-    wind span) and vertical (unit weight × weight span) conductor loads — the
-    "simple lattice-model" load input of ADR-0010. Pure, dependency-free, tested
-    (level/terminal/summit cases).
-  - **Open ATLDP file format:** `atldp-model` gains a serde-derived [`Project`]
-    (`atldp_core`-snapshot conductor, stringing parameters, terrain provenance,
-    the sampled ground profile, and the spotted towers) and the `.atldp`
-    format — **versioned, human-readable JSON** with a `schema_version` gate
-    (rejects a newer schema, migration seam for older). Round-trip tested.
-  - **Drafting & reporting (stage 6):** a shared `analysis` pass derives spans
-    (sag, tension, % RTS, clearance) and structure loads once, feeding both a
-    Markdown **calculation report** (`report`) and a self-contained **SVG
-    plan-&-profile sheet** (`sheet`: terrain, clearance-coloured catenaries,
-    structures, axes, plan strip, vertical exaggeration) — no SVG/PDF deps, both
-    unit-tested.
-  - **App wiring:** Save / Load / Report / Sheet toolbar actions and a wind
-    pressure control; the right panel shows the per-tower structure loads from
-    the same `analysis` (one source of truth with the report and sheet). Binary
-    still **12 MB stripped** on Linux (< 30 MB gate ✅).
+## Next — from a single conductor to a real line (Phases G7–G11)
 
-  With G6 done and the Rust core validated and independently cross-checked, the
-  **Python `core/` is now removed** (ADR-0014; see the retirement note below).
+The G6 model strings one conductor at one global tension. A real line has many wires
+at different tensions, is split into tension sections by anchor structures, is built
+from a library of structure families, must satisfy a standard's load cases, needs a
+precise right-of-way profile, and ends in a field stringing table. These phases add
+exactly that, **reusing the validated core** (`change_of_state`,
+`ruling_span::Section`, `structure::structure_loads`) — they are representational and
+orchestration work over numerics that are already cross-checked.
 
-The original (Python) phases below remain the validated specification the native
-track must reproduce.
+### G7 — Tension sections + multi-wire conductor set — *stages 3–4* — ADR-0015
 
-### Phase 0 — Repository hygiene (prerequisite) — ✅ done (2026-06-15)
+- **Structure typing** (suspension / angle / anchor-dead-end) on each spotted
+  structure; group the ordered structures into **tension sections** at every anchor.
+- Feed each section's spans to `atldp_core::ruling_span::Section` (already built) for
+  a **per-section ruling span and stringing tension** — the home for the ruling span
+  in the product, and the mechanism for **different tractions per stretch**.
+- Replace the single `Project.conductor` + `parameters.horizontal_tension_n` with a
+  **wire set**: N phase conductors (3 · circuits) plus shield/ground wire(s), each
+  with its own conductor spec, attachment geometry, and per-section tension. **Plot
+  every wire**; add a **"lowest wire only"** mode for reading ground clearance.
+- `.atldp` `SCHEMA_VERSION` → 2; migrate a v1 project as a one-wire, single-section
+  case (round-trip tested) via the existing `format::from_atldp_str` seam.
 
-- ✅ Added a `.gitignore` that excludes virtualenvs (`**/.venv/`), large binaries,
-  DEM/LiDAR rasters (`*.tif`, `*.las`, …), prototype-generated HTML, and LaTeX
-  build artifacts. Verified that the 676 MB-class `tests/terrain/.venv` and
-  `dem.tif` are ignored while real source is not.
-- ✅ Adopted per-prototype environments (ADR-0007): the terrain prototype now has
-  a local `tests/terrain/requirements.txt` and a `README.md` documenting its
-  isolated setup.
-- ✅ Established the ADR log ([adr/](adr/)) and this plan as living documents;
-  ADR-0007 is now **Accepted** as the implemented hygiene baseline.
+### G8 — Structure family library & editable structures — *stage 3* — ADR-0016
 
-### Phase 1 — Validated sag-tension core — *pipeline stage 4* — ✅ done (2026-06-16)
+- A `StructureFamily`: name, function, **effective height** (over a height range),
+  per-wire attachment offsets, and an **application/usage chart** (allowable
+  wind-span × weight-span × angle envelope).
+- A spotted `Tower` **references a family + height** and may **override** the
+  effective height / chart — edit a structure after spotting.
+- Manual spotting checks each placement's wind/weight spans
+  (`structure::structure_loads`) against the family chart and flags violations; the
+  later optimizer (Phase 5) **selects** the family from the same check.
 
-This stage was first built as the headless Python `core/` (package `atldp`,
-ADR-0002 layout). That engine has since been **retired** (ADR-0014) now that the
-native `atldp-core` reproduces it and is independently cross-checked; the bullets
-below record what it delivered (the module names are the original Python ones).
+### G9 — Load cases & standards (IEC 60826) — *stages 4–5* — ADR-0017
 
-- ✅ **3D-aware geometry** (`atldp.core.geometry`): attachment points in 3D,
-  reduced to horizontal distance + elevation difference. Sag-tension is usually
-  drawn in 2D but is really 3D — uneven spans and angle towers are the normal
-  case. Plan bearing is carried for angle-tower handling, and load-per-length is
-  a parameter so wind blow-out (Phase 2) slots in without rework. See the
-  expanded `theory.md`.
-- ✅ **Single-span catenary** (exact, **inclined/uneven** supports) and
-  **parabolic** approximation, with the span-to-depth-ratio / inclination switch
-  documented in `theory.md` (`atldp.core.catenary`).
-- ✅ **Change-of-state equation** (conserves the unstrained length; works on
-  inclined spans) and a **ruling-span** section model (`atldp.core.change_of_state`,
-  `atldp.core.ruling_span`).
-- ✅ **Conductor library** with ACSR Drake 26/7 — linear-elastic + thermal model
-  (`atldp.core.conductor`), plus the ✅ **nonlinear bimetallic stress-strain
-  model** (initial/final + creep polynomials, per-material thermal; **G1b** above)
-  that gates and now delivers the OTLS change-of-state cross-check.
-- ✅ Headless library with a thin **CLI** (`atldp`), no GUI (ADR-0006).
-- ✅ **Validation** (the former `core/validation/`, ADR-0008): closed-form catenary
-  identities and parabola↔catenary cross-method agreement are fully independent
-  oracles; change-of-state pins physics invariants (length conservation,
-  monotonicity, round-trip). ✅ **Third-party numeric cross-check (closed
-  2026-06-16):** the Rust catenary matches **OTLS-Models** (`third_party/Models`
-  @ `c270d48`) to its 2-dp rounding (`golden_otls_models`), and the **nonlinear**
-  change-of-state matches its reloader tensions to ≤ 0.2 %
-  (`golden_otls_change_of_state`, G1b) — provenance in
-  `crates/atldp-core/tests/ORACLES.md`. The `mpewsey` reference was algorithm-only
-  (no numbers); `OnSag` is a GUI consuming a tension table, and OTLS-Models is its
-  headless engine.
+- A **criteria-set / load-case engine**: each case (everyday, **extreme wind**,
+  **construction**, **broken-wire / unbalanced longitudinal**, min-temp) is a
+  change-of-state target on the section ruling span plus a structure-load
+  combination, compared to the conductor tension limits and the structure family's
+  rating.
+- IEC 60826 first; NBR 5422 and others slot in as additional criteria sets,
+  selectable per project (extends ADR-0004). Generalises the current single
+  `wind_pressure_pa`. Reuses the cable solver untouched (ADR-0008 suite still gates).
 
-Phase 1 is closed out: the **nonlinear conductor stress-strain/creep model (G1b)**
-landed, and with it the *change-of-state* third-party pin against OTLS-Models — the
-catenary and the change-of-state are both now cross-checked against an independent
-reference (`golden_otls_models`, `golden_otls_change_of_state`).
+### G10 — High-precision right-of-way terrain (~1 m) — *stages 1–2* — ADR-0018
 
-### Phase 2 — Loads, swing, clearances, ampacity — *pipeline stage 4*
+- **Two-tier terrain:** coarse public DEM for wide-area routing; once the route is
+  committed, **densify the corridor** to ~1 m and sample the DEM with **bilinear /
+  bicubic interpolation** (refining `geo::extract_profile` / `dem.elevation_at`),
+  with explicit no-data handling. Leaves a clear hook to substitute surveyed
+  **LiDAR** (G4) or imported survey for the corridor without disturbing consumers.
 
-- Weather load cases and conductor **swing/blowout** (real 3D wind + normative).
-- **Clearance checks**: wire-to-ground and **phase-to-phase** (including swing).
-- **Ampacity** via IEEE 738 (steady-state first, transient later).
-- Encode ABNT NBR 5422 load/clearance criteria as a pluggable "criteria set".
+### G11 — Stringing tables & field outputs — *stage 6*
 
-### Phase 3 — Terrain, route & manual spotting — *pipeline stages 1–3*
+- Per tension section, a **sag-tension table vs temperature** at the stringing
+  tension (and per-span clipping/pulley offsets), emitted alongside the report and
+  sheet. No new numerics — it tabulates the G7 per-section solve through
+  `change_of_state` for the field crew (IEEE 524 stringing practice).
 
-- **Terrain:** promote the terrain prototype — ingest **local DEMs** (`rasterio`)
-  as the source of truth; CRS/datum handling via `pyproj`; ground-profile
-  extraction along the line. Online elevation APIs stay prototype-only (ADR-0005).
-- **LiDAR:** add a path to ingest professionally surveyed **point clouds**
-  (`PDAL`/LAS), classified to ground + features (later than DEM).
-- **Route:** lay out the route over the terrain with **points of interest**
-  (angle points, crossings, obstacles, constraints).
-- **Manual spotting:** place structures along the profile by hand, running the
-  Phase 1/2 clearance and tension checks at each candidate position (ADR-0010).
+### Then — automatic spotting & advanced mechanics
 
-### Phase 4 — Structure modeling & drafting — *pipeline stages 5–6* — ✅ delivered in **G6**
-
-Delivered on the native track in **G6** (above); the original scope:
-
-- **Structure model:** wind span / weight span and structure **load checks**,
-  using a **simple lattice-model representation** — ✅ done (`atldp_core::structure`:
-  signed wind/weight spans + transverse/vertical conductor loads). **Guyed towers**
-  and member-force checks remain a later refinement.
-- **Drafting:** generate **plan & profile sheets** and calculation reports — ✅ done
-  (`atldp_model::sheet` SVG plan-&-profile, `atldp_model::report` Markdown). Tuning
-  the sheets to specific national-standard title blocks is a later refinement.
-- Define and document ATLDP's own **open project file format** — ✅ done (the
-  versioned JSON `.atldp` format, `atldp_model::format`). Import/export with
-  existing commercial formats to address bid-process lock-in is still open.
-
-### Phase 5 — Automatic spotting — *pipeline stage 3, optimized*
-
-- Replace manual placement with an optimizer that **minimizes overall material
-  cost** subject to clearance, tension, and structure-loading constraints
-  (ADR-0010).
-
-### Phase 6 — Advanced mechanics (optional / research track)
-
-- FEM for inclined/uneven spans and dynamics (Bertrand, Sugiyama); reduced-order
-  models for vibration. Validated against the analytic core where they overlap.
+- **Automatic spotting** (the original Phase 5): a cost-minimizing optimizer that
+  **chooses structure families** (G8) and respects load cases (G9) and per-section
+  tractions (G7), layered on the *same* placement-evaluation functions as manual
+  spotting (ADR-0010) so both paths agree by construction.
+- **Advanced mechanics / FEM** (the original Phase 6, research track): FEM for
+  inclined/uneven spans and dynamics (Bertrand, Sugiyama); reduced-order vibration
+  models. Validated against the analytic core where they overlap (ADR-0003).
 
 ## Validation strategy
 
 - **OTLS-Models is the de facto external reference** for the sag-tension core
-  (`third_party/Models` submodule, ADR-0008/0014): both the catenary
-  (`golden_otls_models`) and the nonlinear change-of-state
-  (`golden_otls_change_of_state`, ≤ 0.2 %) are cross-checked against it. The
-  independent nonlinear conductor model (G1b) is what makes the change-of-state
-  comparison a validation rather than a transcription. The (now-retired) Python
-  `core/` was **not** an independent oracle
-  — it was only self-consistent (closed-form identities + invariants), so the
-  Rust↔Python gates proved port fidelity, not correctness; those gates now live on
-  as the committed cross-check fixtures (`crates/atldp-core/tests/fixtures/`).
-- A suite of **golden cases** (`crates/atldp-core/tests/golden_*.rs`), each citing
-  its source; the closed-form catenary identities (Irvine) are a second
-  independent oracle.
-- Cross-check the analytic core against the FEM track in their common domain.
-- Track tolerances explicitly; treat a tolerance regression as a build failure.
+  (`third_party/Models`, ADR-0008): both the catenary (`golden_otls_models`) and the
+  nonlinear change-of-state (`golden_otls_change_of_state`, ≤0.2 %) are cross-checked
+  against it. The independent nonlinear conductor model (G1b) makes the
+  change-of-state comparison a validation rather than a transcription.
+- A suite of **golden cases** (`crates/atldp-core/tests/golden_*.rs`), each citing its
+  source; the closed-form catenary identities (Irvine) are a second independent
+  oracle. The retired Python `core/` lives on as committed cross-check fixtures
+  (`crates/atldp-core/tests/fixtures/`).
+- The G7–G11 work is **additive over these validated numerics** — multi-wire,
+  sections, load cases, and stringing tables orchestrate the same solver, so the
+  existing suite keeps gating correctness; new tests cover the orchestration
+  (section partitioning, schema migration, chart envelopes, table generation).
+- Cross-check the analytic core against the FEM track in their common domain. Track
+  tolerances explicitly; treat a tolerance regression as a build failure.
 
 ## Open questions (to resolve via ADRs / discussion)
 
-- ~~Final language & packaging for the production core.~~ **Resolved:** native Rust
-  workspace, single optimized binary (ADR-0011).
-- ~~GUI/desktop vs. web delivery.~~ **Resolved:** native desktop CAD app, winit +
-  wgpu + egui (ADR-0012).
-- ~~An open project file format.~~ **Resolved:** the versioned JSON `.atldp`
-  format (G6, `atldp_model::format`). Interoperability with a *specific commercial*
-  format — and the legal footing for it — remains open.
-- Maturity of the pure-Rust geospatial stack (`proj4rs` CRS coverage, `laz-rs`
-  decode speed) — validated in G3/G4, with a documented `gdal` fallback (ADR-0013).
+- ~~Final language & packaging.~~ **Resolved:** native Rust workspace (ADR-0011).
+- ~~GUI/desktop vs. web.~~ **Resolved:** native desktop CAD app (ADR-0012).
+- ~~An open project file format.~~ **Resolved:** versioned JSON `.atldp` (G6).
+  Interoperability with a *specific commercial* format — and its legal footing —
+  remains open.
+- **Multi-wire schema migration (G7):** the v1 → v2 upgrade path and how to default
+  per-section, per-wire tractions for an imported single-conductor project.
+- **Application-chart data (G8):** representation of the wind/weight-span envelope and
+  where a project's family charts come from (built-in set vs. user/utility import).
+- **1 m corridor source (G10):** how far DEM interpolation is trusted before a
+  surveyed LiDAR/contour source is required, and the ingestion path for it.
+- Maturity of the pure-Rust geospatial stack (`proj4rs` CRS coverage, `laz-rs` decode
+  speed) — validated in G3/G4, with a documented `gdal` fallback (ADR-0013).

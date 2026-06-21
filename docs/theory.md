@@ -167,6 +167,18 @@ suspension insulators that equalise $H$, geometrically similar spans); its
 accuracy degrades at high operating temperature and for strongly unequal spans
 [2], which is the entry point for the FEM track (ADR-0003).
 
+The *boundaries* of a tension section are the **anchor (strain / dead-end)
+structures**: at a suspension structure the insulator swings freely and the
+horizontal tension passes through, so the section continues; at an anchor the
+conductor is terminated and a new section — with, in general, its own stringing
+tension (**traction**) — begins. A line is therefore a chain of sections, each one
+an independent ruling-span problem with its own $S_r$ and its own $H$. Each **wire**
+(every phase conductor, and the shield/ground wires, which are normally strung
+tighter) likewise has its own tension and load, so the section solve above is run
+per (wire, section) pair rather than once for the whole line. This is the model
+realised in the product by ADR-0015 (`atldp_core::ruling_span::Section` is the
+per-section kernel).
+
 ## Wind and load cases
 
 A weather case scales the per-unit load and tilts the load plane. With self-weight
@@ -187,6 +199,58 @@ load case (e.g. everyday tension, maximum wind, maximum ice, minimum temperature
 is one change-of-state target sharing the section's ruling span, and the governing
 limits are the design tension fractions of RTS (everyday / initial / final) and
 the minimum clearances of the applicable standard [13, 14].
+
+A complete design is verified against the **set** of load cases prescribed by a
+governing standard, not a single weather. Under **IEC 60826** [14] the core
+mechanical cases are: the **everyday (EDS)** long-term tension (creep / fatigue
+limit); **extreme wind** (the high-wind reliability case — transverse load, swing,
+and the structure transverse load it implies); **construction / maintenance**
+(stringing and installation, a safety limit state); the **broken-wire / unbalanced
+longitudinal** case (one or more conductors broken, an unbalanced pull that governs
+anchors); and **minimum temperature** (the low-temperature high-tension case). Each
+case differs in two independent ways — its weather/temperature *state* (a
+change-of-state target on the section ruling span, solved by the engine above) and
+the *load combination* it imposes on the structure (transverse + vertical +
+longitudinal, with per-case factors). ATLDP encodes these as a pluggable **criteria
+set** (ADR-0004/0017): IEC 60826 first, with ABNT NBR 5422 and others as additional
+sets selectable per project, so a result traces to a named clause rather than a
+magic number.
+
+## Stringing table
+
+The field crew strings the conductor at whatever the **ambient temperature** happens
+to be on the day, yet the conductor must end up at the design tension. The
+**stringing (sagging) table** is the bridge: for one tension section it tabulates,
+across a range of conductor temperatures, the **sag and tension** the crew should
+read once the conductor has settled at that temperature. It is produced by running
+the change-of-state from the design (reference) state to each tabulated temperature
+**on the section ruling span**,
+
+$$
+H(\theta_k)\ \text{from change-of-state on } S_r,
+\qquad
+\text{sag}_i(\theta_k) = \text{sag}\big(S_i, h_i; H(\theta_k)\big),
+$$
+
+and then projecting that common $H(\theta_k)$ back onto each real span $i$ to give the
+per-span sag (and, while pulling through travelers, the offset clipping/pulley sag).
+No new mechanics are involved — it is the per-section solve of the previous sections
+evaluated at a sweep of temperatures and laid out for use in the field (IEEE 524
+stringing practice; ATLDP emits it as a stage-6 field output, plan G11).
+
+## Ground profile precision
+
+Clearance is verified as the vertical gap between the lowest wire and the ground
+directly beneath it, so a **metre of error in the ground profile is a metre of error
+in the clearance** — directly against the normative minimum. Public DEMs are coarse
+for this (≈ 30 m posting for SRTM, sampled nearest-cell), which is adequate to lay
+out a route over a wide area but not to certify clearance. The right-of-way profile
+under the wires is therefore refined to ~1 m by densifying the corridor and sampling
+the DEM with **bilinear/bicubic interpolation** rather than nearest-cell, with
+no-data cells flagged rather than zero-filled (ADR-0018). Interpolation makes the
+profile continuous and consistent but cannot create accuracy the source lacks; the
+ultimate ~1 m truth comes from surveyed LiDAR or contour data, for which this leaves
+a clean substitution hook.
 
 ## Creep and high-temperature behaviour
 
