@@ -1,5 +1,7 @@
 //! Golden case: exact catenary against closed-form identities (ADR-0008,
-//! ADR-0014 gate 1). Re-encodes `core/validation/test_catenary_closed_form.py`.
+//! ADR-0014 gate 1). Re-encodes the former Python
+//! `core/validation/test_catenary_closed_form.py` (the Python `core/` is retired,
+//! ADR-0014).
 //!
 //! Source: the catenary closed-form relations (Irvine, *Cable Structures*, MIT
 //! Press, 1981; sketched in `docs/theory.md`). These are independent of the

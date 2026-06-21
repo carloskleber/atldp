@@ -38,8 +38,7 @@ fn synthetic_hgt_1201() -> Vec<u8> {
 /// through the 1201×1201 synthetic tile for most things; this function tests
 /// bilinear interpolation arithmetic directly.
 fn bilinear_lerp(v00: f32, v01: f32, v10: f32, v11: f32, tr: f32, tc: f32) -> f32 {
-    (v00 * (1.0 - tc) + v01 * tc) * (1.0 - tr)
-        + (v10 * (1.0 - tc) + v11 * tc) * tr
+    (v00 * (1.0 - tc) + v01 * tc) * (1.0 - tr) + (v10 * (1.0 - tc) + v11 * tc) * tr
 }
 
 // ── unit tests ────────────────────────────────────────────────────────────────
@@ -159,10 +158,17 @@ fn extract_profile_length_and_distance() {
     assert!((profile[0].distance_m - 0.0).abs() < 1e-6);
     // Last point is at the total diagonal distance (roughly √2 × 0.8° × 111 km).
     let last_dist = profile[49].distance_m;
-    assert!(last_dist > 80_000.0 && last_dist < 140_000.0, "total dist={last_dist}");
+    assert!(
+        last_dist > 80_000.0 && last_dist < 140_000.0,
+        "total dist={last_dist}"
+    );
     // No NaN in the synthetic tile (all values are 0..2400).
     for p in &profile {
-        assert!(!p.elevation_m.is_nan(), "unexpected NaN at dist={}", p.distance_m);
+        assert!(
+            !p.elevation_m.is_nan(),
+            "unexpected NaN at dist={}",
+            p.distance_m
+        );
     }
 }
 
@@ -170,8 +176,7 @@ fn extract_profile_length_and_distance() {
 
 /// Path to the real SRTM tile (populated by `fetch_srtm.sh`).
 fn srtm_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/data/S23W043.hgt")
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/S23W043.hgt")
 }
 
 #[test]
@@ -183,17 +188,30 @@ fn load_real_srtm_tile() {
     let bytes = std::fs::read(&path).expect("read");
     let dem = Dem::from_hgt(&bytes, -23, -43).expect("parse");
 
-    assert!(dem.rows == 1201 || dem.rows == 3601, "unexpected rows={}", dem.rows);
+    assert!(
+        dem.rows == 1201 || dem.rows == 3601,
+        "unexpected rows={}",
+        dem.rows
+    );
     assert_eq!(dem.bounds.lat_min, -23.0);
     assert_eq!(dem.bounds.lat_max, -22.0);
     assert_eq!(dem.bounds.lon_min, -43.0);
     assert_eq!(dem.bounds.lon_max, -42.0);
 
     let (lo, hi) = dem.elev_stats();
-    assert!(lo >= 0.0 && lo < 200.0, "unrealistic min elevation {lo} m");
-    assert!(hi > 100.0 && hi < 2800.0, "unrealistic max elevation {hi} m");
+    assert!(
+        (0.0..200.0).contains(&lo),
+        "unrealistic min elevation {lo} m"
+    );
+    assert!(
+        hi > 100.0 && hi < 2800.0,
+        "unrealistic max elevation {hi} m"
+    );
 
-    println!("SRTM S23W043: {}×{} grid, elevation {lo:.0}–{hi:.0} m", dem.rows, dem.cols);
+    println!(
+        "SRTM S23W043: {}×{} grid, elevation {lo:.0}–{hi:.0} m",
+        dem.rows, dem.cols
+    );
 }
 
 #[test]
@@ -246,11 +264,21 @@ fn local_grid_fits_camera() {
     let grid = dem.to_local_grid(96, 96);
 
     // At lat ≈ -22.5°, 1° lon ≈ 103 km, 1° lat ≈ 111 km.
-    assert!(grid.east_m > 90_000.0 && grid.east_m < 120_000.0, "east_m={}", grid.east_m);
-    assert!(grid.north_m > 100_000.0 && grid.north_m < 130_000.0, "north_m={}", grid.north_m);
+    assert!(
+        grid.east_m > 90_000.0 && grid.east_m < 120_000.0,
+        "east_m={}",
+        grid.east_m
+    );
+    assert!(
+        grid.north_m > 100_000.0 && grid.north_m < 130_000.0,
+        "north_m={}",
+        grid.north_m
+    );
     println!(
         "LocalGrid 96×96: {:.1}×{:.1} km, elev {:.0}–{:.0} m",
-        grid.east_m / 1000.0, grid.north_m / 1000.0,
-        grid.elev_min, grid.elev_max
+        grid.east_m / 1000.0,
+        grid.north_m / 1000.0,
+        grid.elev_min,
+        grid.elev_max
     );
 }

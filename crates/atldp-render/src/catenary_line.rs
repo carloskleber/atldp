@@ -125,7 +125,11 @@ impl CatenaryLineResources {
         let count = vertices.len().min(MAX_VERTICES as usize);
         self.vertex_count = count as u32;
         if count > 0 {
-            queue.write_buffer(&self.vertex_buf, 0, bytemuck::cast_slice(&vertices[..count]));
+            queue.write_buffer(
+                &self.vertex_buf,
+                0,
+                bytemuck::cast_slice(&vertices[..count]),
+            );
         }
     }
 
@@ -151,7 +155,12 @@ impl egui_wgpu::CallbackTrait for CatenaryCallback {
     ) -> Vec<wgpu::CommandBuffer> {
         let res: &mut CatenaryLineResources = resources.get_mut().unwrap();
         res.upload_vertices(queue, &self.vertices);
-        res.upload_camera(queue, CameraUniform { view_proj: self.view_proj });
+        res.upload_camera(
+            queue,
+            CameraUniform {
+                view_proj: self.view_proj,
+            },
+        );
         vec![]
     }
 

@@ -2,8 +2,14 @@
 
 This is the **independent third-party numeric reference** required by
 [ADR-0014](../../../docs/adr/0014-python-core-retirement-criteria.md) gate 3 and
-the long-open Phase-1 validation item in [`../README.md`](../README.md). It closes
-the last gate that was blocking retirement of the Python `core/`.
+the Phase-1 validation item in the
+[implementation plan](../../../docs/IMPLEMENTATION_PLAN.md). It closed the last
+gate that was blocking retirement of the Python `core/`.
+
+> **Provenance note.** The Python `core/` has since been **retired** (ADR-0014):
+> the golden tests in this directory and the committed cross-reference fixtures
+> in [`fixtures/`](fixtures/) are the permanent oracle. This document moved here
+> from the former `core/validation/oracles/README.md` when `core/` was removed.
 
 ## Source
 
@@ -47,13 +53,13 @@ Reference object: `H = 1000`, `w = 0.5`  →  `c = H/w = 2000`.
 | Inclined | (1000, 500) | max support tension   | 1275.78 | `max_tension()` |
 
 These are encoded as the Rust golden test
-[`crates/atldp-core/tests/golden_otls_models.rs`](../../../crates/atldp-core/tests/golden_otls_models.rs),
-which asserts agreement to OTLS's 2-decimal rounding. A regression there fails the
-build (ADR-0008). No C++ is built in CI — the numbers above are the committed,
-auditable digitised reference, and they are independently re-derivable from the
-closed-form catenary identities in [`docs/theory.md`](../../../docs/theory.md).
+[`golden_otls_models.rs`](golden_otls_models.rs), which asserts agreement to
+OTLS's 2-decimal rounding. A regression there fails the build (ADR-0008). No C++
+is built in CI — the numbers above are the committed, auditable digitised
+reference, and they are independently re-derivable from the closed-form catenary
+identities in [`docs/theory.md`](../../../docs/theory.md).
 
-## Change-of-state — now pinned via the nonlinear conductor (G1b)
+## Change-of-state — pinned via the nonlinear conductor (G1b)
 
 OTLS models the ACSR Drake conductor with a **full nonlinear two-component
 (core/shell) load-strain + creep polynomial** model (`test/factory.cc`). The
@@ -86,7 +92,7 @@ stretch, while we use the **horizontal** tension and a continuous polynomial, so
 small bounded difference is expected and is itself evidence of independence.
 
 Encoded as the Rust golden test
-[`crates/atldp-core/tests/golden_otls_change_of_state.rs`](../../../crates/atldp-core/tests/golden_otls_change_of_state.rs),
-which asserts the ≤ 0.2 % agreement and additionally regression-pins our own
-computed tensions. A drift there fails the build (ADR-0008). This closes the
-change-of-state validation gap that Phase 1 left open.
+[`golden_otls_change_of_state.rs`](golden_otls_change_of_state.rs), which asserts
+the ≤ 0.2 % agreement and additionally regression-pins our own computed tensions.
+A drift there fails the build (ADR-0008). This closes the change-of-state
+validation gap that Phase 1 left open.

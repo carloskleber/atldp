@@ -61,7 +61,11 @@ impl Dem {
             .chunks_exact(2)
             .map(|b| {
                 let raw = i16::from_be_bytes([b[0], b[1]]);
-                if raw == -32768 { f32::NAN } else { raw as f32 }
+                if raw == -32768 {
+                    f32::NAN
+                } else {
+                    raw as f32
+                }
             })
             .collect();
 
@@ -111,8 +115,7 @@ impl Dem {
             return f32::NAN;
         }
 
-        (v00 * (1.0 - tc) + v01 * tc) * (1.0 - tr)
-            + (v10 * (1.0 - tc) + v11 * tc) * tr
+        (v00 * (1.0 - tc) + v01 * tc) * (1.0 - tr) + (v10 * (1.0 - tc) + v11 * tc) * tr
     }
 
     /// Elevation statistics for valid (non-void) cells.
@@ -159,22 +162,27 @@ impl Dem {
     /// a display-ready grid.
     pub fn to_local_grid(&self, rows: usize, cols: usize) -> LocalGrid {
         let b = self.bounds;
-        let plane = LocalPlane::new(
-            (b.lat_min + b.lat_max) * 0.5,
-            (b.lon_min + b.lon_max) * 0.5,
-        );
+        let plane = LocalPlane::new((b.lat_min + b.lat_max) * 0.5, (b.lon_min + b.lon_max) * 0.5);
 
         let mut positions = Vec::with_capacity(rows * cols);
         let mut elev_min = f32::INFINITY;
         let mut elev_max = f32::NEG_INFINITY;
 
         for r in 0..rows {
-            let t_r = if rows <= 1 { 0.5 } else { r as f64 / (rows - 1) as f64 };
+            let t_r = if rows <= 1 {
+                0.5
+            } else {
+                r as f64 / (rows - 1) as f64
+            };
             // Rows go N→S: r=0 → lat_max, r=rows-1 → lat_min.
             let lat = b.lat_max - t_r * (b.lat_max - b.lat_min);
 
             for c in 0..cols {
-                let t_c = if cols <= 1 { 0.5 } else { c as f64 / (cols - 1) as f64 };
+                let t_c = if cols <= 1 {
+                    0.5
+                } else {
+                    c as f64 / (cols - 1) as f64
+                };
                 let lon = b.lon_min + t_c * (b.lon_max - b.lon_min);
 
                 let elev = self.elevation_at(lat, lon);
@@ -190,10 +198,7 @@ impl Dem {
         }
 
         // Half-extents for the tile (used by the app to set camera distance).
-        let [east_half, _] = plane.to_local(
-            (b.lat_min + b.lat_max) * 0.5,
-            b.lon_max,
-        );
+        let [east_half, _] = plane.to_local((b.lat_min + b.lat_max) * 0.5, b.lon_max);
         let [_, north_half] = plane.to_local(b.lat_max, (b.lon_min + b.lon_max) * 0.5);
 
         LocalGrid {
@@ -202,8 +207,16 @@ impl Dem {
             positions,
             east_m: (east_half.abs() * 2.0) as f32,
             north_m: (north_half.abs() * 2.0) as f32,
-            elev_min: if elev_min.is_infinite() { 0.0 } else { elev_min },
-            elev_max: if elev_max.is_infinite() { 0.0 } else { elev_max },
+            elev_min: if elev_min.is_infinite() {
+                0.0
+            } else {
+                elev_min
+            },
+            elev_max: if elev_max.is_infinite() {
+                0.0
+            } else {
+                elev_max
+            },
         }
     }
 }

@@ -55,4 +55,4 @@
 * Transmission line simulation (MATLAB): <https://github.com/LukeYoung3000/Transmission_Line_Simulation_MATLAB>
 * Finding the sag in transmission lines: <https://github.com/MichaelRzadki/Finding-the-Sag-in-Transmission-Lines>
 * Maximum sag calculation: <https://github.com/Khwab-kalra/Maximum_Sag_calculation>
-* libwires / conductor library (Overhead Transmission Line Software): <https://github.com/OverheadTransmissionLineSoftware/Models> — **adopted as the independent third-party numeric oracle** (ADR-0008/0014 gate 3): vendored as the `third_party/Models` submodule (@ `c270d48`); its `catenary_test.cc` numbers are cross-checked by `crates/atldp-core/tests/golden_otls_models.rs`. See `core/validation/oracles/README.md`.
+* libwires / conductor library (Overhead Transmission Line Software): <https://github.com/OverheadTransmissionLineSoftware/Models> — **adopted as the independent third-party numeric oracle** (ADR-0008/0014 gate 3): vendored as the `third_party/Models` submodule (@ `c270d48`); its `catenary_test.cc` numbers are cross-checked by `crates/atldp-core/tests/golden_otls_models.rs`. See `crates/atldp-core/tests/ORACLES.md`.

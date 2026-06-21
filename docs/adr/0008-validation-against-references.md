@@ -35,7 +35,7 @@ must agree within tolerance. A tolerance regression is treated as a build failur
 
 The independent third-party reference is **OTLS-Models** (Overhead Transmission
 Line Software), vendored as the `third_party/Models` git submodule @ `c270d48` and
-digitised in `core/validation/oracles/README.md`. The Rust catenary reproduces its
+digitised in `crates/atldp-core/tests/ORACLES.md`. The Rust catenary reproduces its
 `catenary_test.cc` numbers (`crates/atldp-core/tests/golden_otls_models.rs`). The
 sibling `OnSag` project (a wxWidgets GUI consuming a precomputed tension table) was
 not used directly because OTLS-Models *is* its headless numeric engine and the

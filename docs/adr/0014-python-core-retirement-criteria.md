@@ -47,6 +47,22 @@ catenary**; a change-of-state pin awaits the nonlinear conductor model (ADR-0003
 but that is a refinement, not a retirement gate. With gates 1–3 met, the Python
 `core/` may now be removed in a commit citing this ADR.
 
+### Status update (2026-06-20) — Python `core/` retired
+
+With gates 1–3 met, the Python `core/` (engine, CLI, tests, and `validation/`
+tooling) was **removed** in the G6 commit citing this ADR. The permanent oracle
+that remains is entirely in the Rust tree:
+
+- the golden re-encodings (`crates/atldp-core/tests/golden_*.rs`),
+- the committed cross-check fixtures (`crates/atldp-core/tests/fixtures/`, the
+  frozen sweep output of the former Python oracle — gate 2), and
+- the third-party provenance, relocated from `core/validation/oracles/README.md`
+  to [`crates/atldp-core/tests/ORACLES.md`](../../crates/atldp-core/tests/ORACLES.md).
+
+No Python remains in the engine path; the only Python left in the repository is
+the sanctioned terrain *prototype* under `tests/terrain/` (ADR-0007), which is
+not part of the validated core.
+
 ## Consequences
 
 - Retirement is a verifiable gate, not a judgement call, and is auditable.

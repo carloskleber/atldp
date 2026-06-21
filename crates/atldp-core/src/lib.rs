@@ -12,6 +12,8 @@
 //! - [`conductor`]       — linear-elastic + thermal model, plus the nonlinear
 //!   bimetallic stress-strain model (G1b) used for the OTLS change-of-state
 //!   cross-check
+//! - [`structure`]       — wind/weight span and the conductor loads on a support
+//!   (stage 5, G6)
 //!
 //! The crate has no external dependencies: it is the validation target for the
 //! Python oracle, so its numerics are self-contained and auditable.
@@ -21,6 +23,7 @@ pub mod change_of_state;
 pub mod conductor;
 pub mod geometry;
 pub mod ruling_span;
+pub mod structure;
 
 /// Standard gravity (CODATA / ISO 80000), m/s^2.
 pub const G: f64 = 9.80665;

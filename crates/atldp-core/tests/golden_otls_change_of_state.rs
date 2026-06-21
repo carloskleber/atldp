@@ -27,7 +27,7 @@
 //! the average tension and a piecewise region model with explicit stretch; we use
 //! the horizontal tension and a continuous polynomial. So we require agreement to
 //! a tight engineering tolerance (≤ 0.2 %), not bit-identity. The exact tolerance
-//! is recorded in `core/validation/oracles/README.md`.
+//! is recorded in `tests/ORACLES.md`.
 
 use atldp_core::catenary::Method;
 use atldp_core::change_of_state::{change_of_state, StateCase};

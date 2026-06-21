@@ -1,6 +1,7 @@
 //! Golden case: the parabola must agree with the exact catenary in the shallow
-//! regime where it is admissible (ADR-0003; ADR-0014 gate 1). Re-encodes
-//! `core/validation/test_method_agreement.py`.
+//! regime where it is admissible (ADR-0003; ADR-0014 gate 1). Re-encodes the
+//! former Python `core/validation/test_method_agreement.py` (the Python `core/`
+//! is retired, ADR-0014).
 //!
 //! For a level span at sag/span well below 1/8, the truncated parabola and the
 //! exact catenary agree to better than 0.2% on sag and max tension, and to ~1e-5

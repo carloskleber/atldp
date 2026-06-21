@@ -19,9 +19,11 @@ architectural decisions that back it (see [adr/](adr/)).
 > (`third_party/Models`, ADR-0008/0014); gates 1–2 establish only Rust≡Python
 > *port fidelity*, so external trust rests on the OTLS cross-check (gate 3) plus
 > the closed-form identities. The Python `core/` is retired once that holds —
-> which it now does (ADR-0014). The build phases below are renamed to a
-> native track (Phase **G0–G6**); the original phase numbering is preserved in the
-> per-phase headings for traceability.
+> which it now does, and the Python `core/` has been **removed** (ADR-0014); its
+> golden cases and cross-check fixtures live on in the Rust test tree
+> (`crates/atldp-core/tests/`). The build phases below are renamed to a native
+> track (Phase **G0–G6**, now complete); the original phase numbering is preserved
+> in the per-phase headings for traceability.
 
 ## Guiding principles
 
@@ -96,14 +98,14 @@ independently validated; see G1 and the validation strategy).
   ruling span, and conductor are reimplemented in Rust as a **dependency-free**
   `atldp-core`, with the thin `atldp` CLI (`catenary`, `cos`) ported alongside.
   **All three of ADR-0014's retirement gates are now met:** every
-  `core/validation/` golden case is re-encoded as an `atldp-core` test (gate 1); a
-  **cross-check harness** (`core/validation/export_reference.py` → committed CSV
-  fixtures → `crates/atldp-core/tests/cross_check_python_oracle.rs`) agrees with
+  (former) `core/validation/` golden case is re-encoded as an `atldp-core` test
+  (gate 1); a **cross-check harness** (the former `core/validation/export_reference.py`
+  → committed CSV fixtures → `crates/atldp-core/tests/cross_check_python_oracle.rs`) agrees with
   the Python oracle to ≤1e-7 rel over an 882-case sweep (gate 2); and the Rust
   catenary now reproduces an **independent third-party reference** —
   **OTLS-Models** (`third_party/Models` submodule @ `c270d48`, its own
   `catenary_test.cc` expectations) via `crates/atldp-core/tests/golden_otls_models.rs`
-  (gate 3, see `core/validation/oracles/README.md`). The Python `core/` is
+  (gate 3, see `crates/atldp-core/tests/ORACLES.md`). The Python `core/` is
   therefore **eligible for retirement** per ADR-0014 (removable in a single
   ADR-citing commit). `OnSag` was evaluated but is a wxWidgets GUI consuming a
   precomputed tension table; OTLS-Models is its headless numeric engine and the
@@ -125,7 +127,7 @@ independently validated; see G1 and the validation strategy).
   `catenary_cable_reloader` reload tensions (6788 / 4701 / 17123 lbf reference
   cases) to **≤ 0.2 %** — the bounded gap traces to legitimate convention
   differences (horizontal vs. average tension; continuous polynomial vs. piecewise
-  regions), recorded in `core/validation/oracles/README.md` and pinned by
+  regions), recorded in `crates/atldp-core/tests/ORACLES.md` and pinned by
   `crates/atldp-core/tests/golden_otls_change_of_state.rs`. This **closes the
   change-of-state validation gap** Phase 1 left open. (Creep polynomials and the
   initial/final distinction are in the model; the after-creep and prior-stretch
@@ -157,9 +159,32 @@ independently validated; see G1 and the validation strategy).
   horizontal tension, vertical exaggeration, Undo / Clear; worst-clearance indicator
   in the toolbar; tower + conductor geometry in the 3D viewport via the
   `SpottingLines` LINE_LIST wgpu renderer (`atldp-render::spotting_lines`).
-- **G6 — Structure modeling, drafting & file format (stages 5–6).** 2D plan &
-  profile sheets, reports, and `atldp-model` serialization as the open ATLDP
-  project format.
+- **G6 — Structure modeling, drafting & file format (stages 5–6). ✅ done (2026-06-20).**
+  - **Structure modeling (stage 5):** `atldp_core::structure` computes per-support
+    **wind span** (half-sum of adjacent horizontal spans) and **weight span**
+    (distance between adjacent catenary low points, *signed* so summit uplift
+    shows as a negative span), and the transverse (wind-pressure × diameter ×
+    wind span) and vertical (unit weight × weight span) conductor loads — the
+    "simple lattice-model" load input of ADR-0010. Pure, dependency-free, tested
+    (level/terminal/summit cases).
+  - **Open ATLDP file format:** `atldp-model` gains a serde-derived [`Project`]
+    (`atldp_core`-snapshot conductor, stringing parameters, terrain provenance,
+    the sampled ground profile, and the spotted towers) and the `.atldp`
+    format — **versioned, human-readable JSON** with a `schema_version` gate
+    (rejects a newer schema, migration seam for older). Round-trip tested.
+  - **Drafting & reporting (stage 6):** a shared `analysis` pass derives spans
+    (sag, tension, % RTS, clearance) and structure loads once, feeding both a
+    Markdown **calculation report** (`report`) and a self-contained **SVG
+    plan-&-profile sheet** (`sheet`: terrain, clearance-coloured catenaries,
+    structures, axes, plan strip, vertical exaggeration) — no SVG/PDF deps, both
+    unit-tested.
+  - **App wiring:** Save / Load / Report / Sheet toolbar actions and a wind
+    pressure control; the right panel shows the per-tower structure loads from
+    the same `analysis` (one source of truth with the report and sheet). Binary
+    still **12 MB stripped** on Linux (< 30 MB gate ✅).
+
+  With G6 done and the Rust core validated and independently cross-checked, the
+  **Python `core/` is now removed** (ADR-0014; see the retirement note below).
 
 The original (Python) phases below remain the validated specification the native
 track must reproduce.
@@ -176,9 +201,12 @@ track must reproduce.
 - ✅ Established the ADR log ([adr/](adr/)) and this plan as living documents;
   ADR-0007 is now **Accepted** as the implemented hygiene baseline.
 
-### Phase 1 — Validated sag-tension core — *pipeline stage 4* — 🚧 in progress (2026-06-15)
+### Phase 1 — Validated sag-tension core — *pipeline stage 4* — ✅ done (2026-06-16)
 
-The headless core lives in [`core/`](../core/) (package `atldp`, ADR-0002 layout).
+This stage was first built as the headless Python `core/` (package `atldp`,
+ADR-0002 layout). That engine has since been **retired** (ADR-0014) now that the
+native `atldp-core` reproduces it and is independently cross-checked; the bullets
+below record what it delivered (the module names are the original Python ones).
 
 - ✅ **3D-aware geometry** (`atldp.core.geometry`): attachment points in 3D,
   reduced to horizontal distance + elevation difference. Sag-tension is usually
@@ -197,7 +225,7 @@ The headless core lives in [`core/`](../core/) (package `atldp`, ADR-0002 layout
   model** (initial/final + creep polynomials, per-material thermal; **G1b** above)
   that gates and now delivers the OTLS change-of-state cross-check.
 - ✅ Headless library with a thin **CLI** (`atldp`), no GUI (ADR-0006).
-- ✅ **Validation** (`core/validation/`, ADR-0008): closed-form catenary
+- ✅ **Validation** (the former `core/validation/`, ADR-0008): closed-form catenary
   identities and parabola↔catenary cross-method agreement are fully independent
   oracles; change-of-state pins physics invariants (length conservation,
   monotonicity, round-trip). ✅ **Third-party numeric cross-check (closed
@@ -205,7 +233,7 @@ The headless core lives in [`core/`](../core/) (package `atldp`, ADR-0002 layout
   @ `c270d48`) to its 2-dp rounding (`golden_otls_models`), and the **nonlinear**
   change-of-state matches its reloader tensions to ≤ 0.2 %
   (`golden_otls_change_of_state`, G1b) — provenance in
-  `core/validation/oracles/README.md`. The `mpewsey` reference was algorithm-only
+  `crates/atldp-core/tests/ORACLES.md`. The `mpewsey` reference was algorithm-only
   (no numbers); `OnSag` is a GUI consuming a tension table, and OTLS-Models is its
   headless engine.
 
@@ -233,14 +261,20 @@ reference (`golden_otls_models`, `golden_otls_change_of_state`).
 - **Manual spotting:** place structures along the profile by hand, running the
   Phase 1/2 clearance and tension checks at each candidate position (ADR-0010).
 
-### Phase 4 — Structure modeling & drafting — *pipeline stages 5–6*
+### Phase 4 — Structure modeling & drafting — *pipeline stages 5–6* — ✅ delivered in **G6**
+
+Delivered on the native track in **G6** (above); the original scope:
 
 - **Structure model:** wind span / weight span and structure **load checks**,
-  including **guyed towers**, using a **simple lattice-model representation**.
-- **Drafting:** generate **plan & profile sheets** and calculation reports per
-  national standards.
-- Define and document ATLDP's own **open project file format**; investigate
-  import/export with existing formats to address bid-process lock-in.
+  using a **simple lattice-model representation** — ✅ done (`atldp_core::structure`:
+  signed wind/weight spans + transverse/vertical conductor loads). **Guyed towers**
+  and member-force checks remain a later refinement.
+- **Drafting:** generate **plan & profile sheets** and calculation reports — ✅ done
+  (`atldp_model::sheet` SVG plan-&-profile, `atldp_model::report` Markdown). Tuning
+  the sheets to specific national-standard title blocks is a later refinement.
+- Define and document ATLDP's own **open project file format** — ✅ done (the
+  versioned JSON `.atldp` format, `atldp_model::format`). Import/export with
+  existing commercial formats to address bid-process lock-in is still open.
 
 ### Phase 5 — Automatic spotting — *pipeline stage 3, optimized*
 
@@ -260,12 +294,14 @@ reference (`golden_otls_models`, `golden_otls_change_of_state`).
   (`golden_otls_models`) and the nonlinear change-of-state
   (`golden_otls_change_of_state`, ≤ 0.2 %) are cross-checked against it. The
   independent nonlinear conductor model (G1b) is what makes the change-of-state
-  comparison a validation rather than a transcription. The Python `core/` is
-  **not** an independent oracle
+  comparison a validation rather than a transcription. The (now-retired) Python
+  `core/` was **not** an independent oracle
   — it was only self-consistent (closed-form identities + invariants), so the
-  Rust↔Python gates prove port fidelity, not correctness.
-- A `validation/` suite of **golden cases**, each citing its source; the
-  closed-form catenary identities (Irvine) are a second independent oracle.
+  Rust↔Python gates proved port fidelity, not correctness; those gates now live on
+  as the committed cross-check fixtures (`crates/atldp-core/tests/fixtures/`).
+- A suite of **golden cases** (`crates/atldp-core/tests/golden_*.rs`), each citing
+  its source; the closed-form catenary identities (Irvine) are a second
+  independent oracle.
 - Cross-check the analytic core against the FEM track in their common domain.
 - Track tolerances explicitly; treat a tolerance regression as a build failure.
 
@@ -275,7 +311,8 @@ reference (`golden_otls_models`, `golden_otls_change_of_state`).
   workspace, single optimized binary (ADR-0011).
 - ~~GUI/desktop vs. web delivery.~~ **Resolved:** native desktop CAD app, winit +
   wgpu + egui (ADR-0012).
-- Whether to target interoperability with a specific commercial format, and the
-  legal footing for doing so (addressed by the open ATLDP format in G6).
+- ~~An open project file format.~~ **Resolved:** the versioned JSON `.atldp`
+  format (G6, `atldp_model::format`). Interoperability with a *specific commercial*
+  format — and the legal footing for it — remains open.
 - Maturity of the pure-Rust geospatial stack (`proj4rs` CRS coverage, `laz-rs`
   decode speed) — validated in G3/G4, with a documented `gdal` fallback (ADR-0013).

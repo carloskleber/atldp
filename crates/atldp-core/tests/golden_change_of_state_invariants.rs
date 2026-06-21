@@ -1,11 +1,13 @@
 //! Golden case: change-of-state physics invariants for Drake ACSR (ADR-0008;
-//! ADR-0014 gate 1). Re-encodes
-//! `core/validation/test_change_of_state_invariants.py`.
+//! ADR-0014 gate 1). Re-encodes the former Python
+//! `core/validation/test_change_of_state_invariants.py` (the Python `core/` has
+//! since been retired, ADR-0014).
 //!
 //! Source: the change-of-state equation (CIGRE TB 324; Winkelman 1959). These pin
 //! the *invariants* the equation must satisfy rather than a third party's
-//! published decimals (the independent third-party numeric cross-check is still
-//! the open Phase-1 item tracked in `core/validation/README.md`).
+//! published decimals; the independent third-party numeric cross-check is now
+//! delivered against OTLS-Models (see `tests/ORACLES.md`,
+//! `golden_otls_change_of_state.rs`).
 
 use atldp_core::catenary::{solve_span, Method};
 use atldp_core::change_of_state::{change_of_state, StateCase};

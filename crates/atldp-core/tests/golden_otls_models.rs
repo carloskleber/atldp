@@ -5,7 +5,7 @@
 //! as the git submodule `third_party/Models` pinned at commit `c270d48`
 //! (tag 4.0.0-5), file `test/transmissionline/catenary_test.cc`. The values below
 //! are that suite's own `EXPECT_EQ` expectations, reproduced verbatim. Provenance
-//! and the full table live in `core/validation/oracles/README.md`.
+//! and the full table live in `tests/ORACLES.md`.
 //!
 //! The catenary relations depend only on the dimensionless group `S/(2c)` with
 //! `c = H/w`, so they are independent of the conductor constitutive model *and*
