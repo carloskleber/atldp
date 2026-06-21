@@ -56,4 +56,7 @@ is the family's own (no standard tables are redistributed — ADR-0004).
   tractable.
 - Requires a data model for application charts (piecewise envelope) and a UI to edit a
   structure's family/height/overrides after placement; the format gains the library
-  and the per-tower reference (schema bump, coordinated with ADR-0015's v2).
+  and the per-tower reference (schema bump, coordinated with ADR-0015's v2). The
+  post-placement edit UI is realised as the **editable tower table** (ADR-0019) and the
+  **tower-elevation view** (ADR-0020), which also gives the family a drawable
+  attachment/silhouette geometry beyond the scalar height assumed here.

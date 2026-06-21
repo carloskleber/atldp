@@ -10,8 +10,11 @@ stages, each consuming the previous stage's output:
 
 1. **Terrain model** — public DEM first, professionally surveyed **LiDAR point
    clouds** later.
-2. **Line route** — route over the terrain with points of interest.
-3. **Tower placement (spotting)** — manual first, automatic later (ADR-0010).
+2. **Line route** — an explicit polyline of **points of interest (POIs)** over the
+   terrain; the **2-D profile is derived from it** by sampling the terrain along the
+   polyline (ADR-0019). The profile is an *output* of this stage, not an input to it.
+3. **Tower placement (spotting)** — manual first, automatic later (ADR-0010); **angle
+   POIs oblige a structure** at their station (ADR-0019).
 4. **Sag-tension** — temperature/wind cases, swing/blowout, tension limits, and
    wire-to-ground and phase-to-phase clearances.
 5. **Structure modeling** — wind/weight span and load checks, including guyed

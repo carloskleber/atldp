@@ -80,10 +80,14 @@ plane between two equal-height supports. The real problem is 3D:
   turning the in-plane catenary into a swung 3D curve. This is a load-case concern
   (Phase 2): the static shape in the swung plane is still a catenary under the
   *resultant* load per unit length.
-- **Higher-fidelity coupling.** When ruling-span assumptions break down (strongly
-  uneven/inclined spans, longitudinal coupling, dynamics), the complete models use
-  the **finite element method** [10, 11, 12]. That is the later FEM track
-  (ADR-0003), validated against the analytic core where they overlap.
+- **Higher-fidelity coupling.** When ruling-span assumptions break down, the complete
+  models use the **finite element method** [10, 11, 12]. Because each structure can
+  attach the conductors at its **own points** (different family, height and crossarm
+  geometry), spans between mixed structures are **genuinely uneven** — the common case,
+  not an edge case — so the **static** uneven-span FEM solve is **brought forward**
+  (ADR-0021, phase G11) as an alternative section kernel, validated against the analytic
+  core in their overlap. The **dynamic** FEM track (longitudinal coupling, vibration)
+  stays behind the static core (ADR-0003).
 
 The analytic core therefore works in 3D coordinates from the start, reduces each
 span to a horizontal distance $S$ and elevation difference $h$, and solves the
@@ -165,7 +169,10 @@ solved once (by `atldp.core.ruling_span`) and applied back to every real span.
 This reduction is exact only under its usual assumptions (free-swinging
 suspension insulators that equalise $H$, geometrically similar spans); its
 accuracy degrades at high operating temperature and for strongly unequal spans
-[2], which is the entry point for the FEM track (ADR-0003).
+[2]. Because real structures attach the wires at different points, unequal spans
+are common, so this is the entry point for the **uneven-span FEM section solver**,
+brought forward to phase G11 (ADR-0021) and validated against this analytic
+reduction in the equal-span limit (ADR-0003/0008).
 
 The *boundaries* of a tension section are the **anchor (strain / dead-end)
 structures**: at a suspension structure the insulator swings freely and the
@@ -236,7 +243,7 @@ and then projecting that common $H(\theta_k)$ back onto each real span $i$ to gi
 per-span sag (and, while pulling through travelers, the offset clipping/pulley sag).
 No new mechanics are involved — it is the per-section solve of the previous sections
 evaluated at a sweep of temperatures and laid out for use in the field (IEEE 524
-stringing practice; ATLDP emits it as a stage-6 field output, plan G11).
+stringing practice; ATLDP emits it as a stage-6 field output, plan G14).
 
 ## Ground profile precision
 
@@ -375,9 +382,10 @@ and the cubic term the large-amplitude hardening. Reducing the full
 finite-element discretisation to a handful of such modal equations is the
 **reduced-order model** of [11]; the underlying high-fidelity discretisation is
 the robust cable finite element of [10] and the non-incremental formulation of
-[12]. In ATLDP this dynamic/FEM track sits behind the analytic core (ADR-0003) and
-is validated against it wherever the two overlap (the static limit, small
-oscillations about equilibrium).
+[12]. The same cable element is what the **static** uneven-span section solver uses
+(ADR-0021, brought forward to G11); this **dynamic** ROM track stays later, behind the
+static core (ADR-0003), validated against it wherever the two overlap (the static
+limit, small oscillations about equilibrium).
 
 ## References
 

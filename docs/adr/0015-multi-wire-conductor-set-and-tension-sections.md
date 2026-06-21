@@ -61,7 +61,7 @@ pair, defaulting from the criteria set (ADR-0017) but user-overridable — this 
 - The ruling span gains a concrete home in the product: sections are visible,
   editable, and each reports its own ruling span and tension — closing the "where is
   the ruling span defined?" gap.
-- Sag-tension, clearance, drafting (sheet/report), and the stringing table (G11) all
+- Sag-tension, clearance, drafting (sheet/report), and the stringing table (G14) all
   iterate over (wire × section) instead of a single conductor; the analysis pass in
   `atldp_model::analysis` becomes the place that fans out and is the single source of
   truth for every consumer.

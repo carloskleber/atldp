@@ -1,7 +1,16 @@
 # ADR-0003 — Analytic sag-tension baseline before FEM
 
-- Status: Accepted (implemented in Phase 1, 2026-06-15)
+- Status: Accepted (implemented in Phase 1, 2026-06-15); **FEM *timing* amended by
+  [ADR-0021](0021-bring-fem-forward-for-uneven-spans.md)** (2026-06-21)
 - Date: 2026-06-15
+
+> **Amendment (ADR-0021, 2026-06-21).** This ADR's *principle* stands — the analytic
+> core is built first and remains the validation oracle. Its *sequencing* is revised:
+> because each structure can have a different attachment point, uneven spans are the
+> **common** case and the ruling-span assumption breaks down early, so the FEM track is
+> **brought forward** (phase G11) for the static uneven-span section solve, validated
+> against this analytic core in their overlap. The dynamic FEM/ROM track remains later.
+> See ADR-0021.
 
 ## Context
 
@@ -30,4 +39,5 @@ domain (see ADR-0008).
 
 - Usable, auditable results early, against which everything else is checked.
 - The analytic core is the canonical reference and the validation oracle.
-- Some real configurations (very uneven spans, dynamics) wait for Phase 4.
+- Some real configurations wait for the FEM track: **uneven spans are brought forward
+  to G11** (ADR-0021); dynamics remain a later research track.

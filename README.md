@@ -13,8 +13,13 @@ plan-&-profile sheets, and the open `.atldp` project format, now over a real
 **multi-wire set** (phases + shield wires) split into **tension sections** at the
 anchor structures, with a **structure-family library** whose application charts gate
 each placement (G7/G8, ADR-0015/0016; `.atldp` schema v2 with a v1→v2 migration).
-Phases **G9–G11** (ADR-0017–0018) are the next traced steps: standards load cases
-(IEC 60826), a precise ~1 m right-of-way profile, and field stringing tables.
+The next steps were **reprioritised (2026-06-21, ADR-0019–0021)** around the real
+design workflow: an explicit **route/POI model** whose 2-D profile is derived from it,
+with **obligatory structures at angle points** (G9); a **tower-elevation view** that
+draws each structure as a real shape with its per-wire attachment points (G10); and
+**FEM brought forward** to solve the uneven, multi-attachment spans the ruling span
+can't (G11). The previously-planned standards load cases (IEC 60826), ~1 m
+right-of-way profile, and field stringing tables follow as **G12–G14** (ADR-0017–0018).
 
 ---
 
@@ -47,20 +52,27 @@ consuming the previous stage's output (see ADR-0009):
    clouds**. A coarse tier covers the wide area for routing; the committed
    right-of-way corridor is refined to a **precise ~1 m profile** by interpolation
    (ADR-0018).
-2. **Line route** — lay out the route over the terrain, marking points of
-   interest (angle points, crossings, obstacles, constraints).
+2. **Line route** — lay out the route over the terrain as an explicit polyline of
+   **points of interest** (angle points, crossings, obstacles, constraints). The 2-D
+   **profile is derived from the route** by sampling the terrain along it (ADR-0019) —
+   it is an output of this stage, not an independent input.
 3. **Tower placement (spotting)** — place structures along the route, each typed as
-   **suspension or anchor (strain/dead-end)**; anchors divide the line into **tension
-   sections**, each with its own ruling span and stringing traction. Structures are
-   chosen from a **family library** by their application chart (ADR-0015/0016).
-   Manual first; the target is **automatic spotting** that minimizes material cost
-   subject to clearance and loading constraints.
+   **suspension, angle, or anchor (strain/dead-end)**; **a structure is obligatory at
+   every angle point** (a conductor cannot change direction in mid-span). Anchors divide
+   the line into **tension sections**, each with its own stringing traction. Structures
+   are chosen from a **family library** by their application chart and shown as a **real
+   drawn shape** with their per-wire attachment points (ADR-0015/0016/0020), and remain
+   **editable after spotting** (change type/family/height from a table). Manual first;
+   the target is **automatic spotting** that minimizes material cost subject to
+   clearance and loading constraints.
 4. **Sag-tension** — for **every wire** (three phase conductors per circuit plus
    shield / ground wires, each at its own tension and load), compute sag and tension
    across weather and **load cases** (temperature, extreme wind, construction,
    broken-wire — IEC 60826), including conductor **swing / blowout**, and verify
    tension limits and clearances **wire-to-ground** (governed by the lowest wire) and
-   **between phases**.
+   **between phases**. The section is solved by the analytic **ruling span** where its
+   assumptions hold and by **FEM where the spans are uneven / multi-attachment**
+   (ADR-0021), with the analytic core kept as the validation oracle.
 5. **Structure modeling** — wind span / weight span / longitudinal span loads and
    structure load checks against the family's rating, including **guyed towers**,
    using a simple lattice-model representation.
@@ -85,16 +97,21 @@ national standards.
    LiDAR, spotting, and drafting (phases **G0–G6**; ADR-0011/0012/0013). Maps onto
    the same pipeline stages 1–6 for a single conductor.
 4. **Real line model** (current) — grow the single-conductor tool into a real
-   project: tension sections + multi-wire set (**G7, done**), structure-family
-   library (**G8, done**), standards load cases (G9), a ~1 m right-of-way profile
-   (G10), and field stringing tables (G11) — ADR-0015–0018.
+   project: tension sections + multi-wire set (**G7, done**) and structure-family
+   library (**G8, done**), then — reprioritised around the real workflow (ADR-0019–0021)
+   — an explicit **route/POI model** with obligatory angle structures (**G9**), the
+   **tower-elevation view** with real attachment geometry (**G10**), and **FEM for
+   uneven spans** (**G11**), followed by standards load cases (**G12**), a ~1 m
+   right-of-way profile (**G13**), and field stringing tables (**G14**) — ADR-0015–0021.
 5. **Automatic spotting** — the cost-minimizing optimizer for stage 3, selecting
-   structure families and respecting load cases and section tractions.
+   structure families and respecting load cases, section tractions, and the obligatory
+   angle structures.
 
-The product workflow (pipeline stages) is unchanged; only the implementation
-language moves from Python to Rust. See
-[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for the native build
-track (G0–G8).
+The six pipeline stages are unchanged; the 2026-06-21 reprioritisation (ADR-0019–0021)
+sharpens *how* stages 2–4 are realised (route-derived profile, structures as real
+shapes, FEM for uneven spans), not the stage sequence. See
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for the native build track
+(G0–G8 delivered; G9–G14 next).
 
 See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for the detailed,
 phased plan, and [docs/adr/](docs/adr/) for the architectural decisions and their
@@ -110,7 +127,7 @@ rationale.
 ├── crates/                 # Native crates (layered per ADR-0011)
 │   ├── atldp-core/          #   pure sag-tension numerics, ruling-span sections + structure loads (no I/O, no GPU)
 │   ├── atldp-geo/           #   DEM / CRS / LiDAR ingestion; coarse map + ~1 m corridor (pure-Rust, ADR-0013/0018)
-│   ├── atldp-model/         #   project model (wire set, sections, structure library), .atldp format, reports, sheets & stringing table (ADR-0009/0015–0017)
+│   ├── atldp-model/         #   project model (route/POIs, wire set, sections, structure library + geometry), .atldp format, reports, sheets & stringing table (ADR-0009/0015–0021)
 │   ├── atldp-render/        #   wgpu 2D + 3D rendering (ADR-0012)
 │   ├── atldp-app/           #   winit/egui desktop CAD shell (the binary)
 │   └── atldp-cli/           #   thin CLI for scripting parity

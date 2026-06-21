@@ -21,6 +21,14 @@ Implement **manual spotting first**: the engineer places structures along the
 profile, and the system evaluates each placement against the validated stage 4/5
 checks (clearances, tension, structure loading), flagging violations.
 
+Spotting runs on the **profile derived from the route** (ADR-0019), not on a
+free-standing profile: the route's **angle POIs pin obligatory structures**
+(a conductor cannot change plan direction in mid-span), and the engineer places the
+tangent structures between them. Placed structures are **editable after spotting** — a
+table row changes a structure's function (suspension ↔ angle ↔ anchor), family, and
+height, which re-partitions the tension sections and re-runs the checks live
+(ADR-0015/0016/0019).
+
 Treat **automatic, cost-minimizing spotting as a later phase** (Phase 5) layered
 on top of the *same* placement-evaluation functions used by manual spotting. The
 manual evaluator becomes the optimizer's objective/constraint oracle, so both

@@ -2,8 +2,13 @@
 
 This translates the project's goals (see [README](../README.md)) into a phased,
 verifiable plan, and points to the architectural decisions that back it (see
-[adr/](adr/)). It is a living document: phases **G0–G8 are delivered**, phases
-**G9–G11** are the next traced steps (ADR-0017–0018).
+[adr/](adr/)). It is a living document: phases **G0–G8 are delivered**, and the next
+steps were **reprioritised on 2026-06-21** (ADR-0019–0021) around the real design
+workflow — an explicit route/POI model with obligatory angle structures (**G9**), the
+tower-elevation view with real attachment geometry (**G10**), and bringing the FEM
+section solver forward for uneven spans (**G11**) — ahead of the previously-planned
+standards load cases, ~1 m terrain, and stringing tables, which move to **G12–G14**
+(ADR-0017–0018).
 
 > **Substrate (2026-06-15).** The product is a desktop CAD application — interactive
 > 2D/3D views (terrain, route, towers, conductors, LiDAR point clouds), high
@@ -37,9 +42,9 @@ the *runtime* order of a project — distinct from the *build* order of the phas
 | # | Stage | Input → Output | Notes |
 | --- | --- | --- | --- |
 | 1 | **Terrain model** | public DEM / LiDAR → 3D ground+feature model | coarse wide-area tier + interpolated ~1 m right-of-way corridor (ADR-0018, G10) |
-| 2 | **Line route** | terrain + POIs → georeferenced route | angle points, crossings, obstacles, constraints |
-| 3 | **Tower placement (spotting)** | route + structure library → spotted, typed structures | suspension vs anchor typing → **tension sections** (ADR-0015); structures chosen from **families** by application chart (ADR-0016); manual first, auto later |
-| 4 | **Sag-tension** | sections + **wire set** + load cases → sags, tensions, clearances | per-section ruling span; **every wire** (3 phases/circuit + shield) at its own tension; swing/blowout; wire-ground & phase-phase clearances |
+| 2 | **Line route** | terrain + **POIs** → georeferenced route, **profile derived from it** | route is an explicit POI polyline (angle points, crossings, obstacles, constraints); the 2-D profile is *sampled along the route*, not an independent input (ADR-0019, G9) |
+| 3 | **Tower placement (spotting)** | route + structure library → spotted, typed structures | **angle POIs oblige a structure** (ADR-0019, G9); suspension vs anchor typing → **tension sections** (ADR-0015); structures chosen from **families** by application chart, each a **drawn shape with real attachment points** (ADR-0016/0020, G10); **editable after spotting** (table row → change type/family/height); manual first, auto later |
+| 4 | **Sag-tension** | sections + **wire set** + load cases → sags, tensions, clearances | per-section solve — analytic **ruling span** where its assumptions hold, **FEM for uneven / multi-attachment spans** (ADR-0021, G11); **every wire** (3 phases/circuit + shield) at its own tension; swing/blowout; wire-ground & phase-phase clearances |
 | 5 | **Structure modeling** | spotted structures + spans + load cases → load checks | wind/weight/longitudinal span loads vs the family's rating; **IEC 60826** cases (ADR-0017) |
 | 6 | **Plan & profile drafting** | full project model → sheets & reports | drawings, calculation reports, and the field **stringing table** (G11) |
 
@@ -54,12 +59,13 @@ The pipeline rests on these largely independent computational modules:
 | **Change-of-state** | equilibrium across temperature/load/creep states | 4 | CIGRE TB 601 |
 | **Ruling span & tension sections** | multi-span section between anchors; per-section traction | 3, 4 | IEEE/CIGRE practice; ADR-0015 |
 | **Multi-wire set** | phases (3·circuits) + shield wires, each own tension/load; lowest-wire clearance | 4 | ADR-0015 |
-| **Uneven / inclined / dynamic spans** | FEM when ruling-span assumptions break | 4 | Bertrand 2020/2022; Sugiyama 2003 |
+| **Uneven / multi-attachment spans (static FEM)** | cable-element section solve when ruling-span equal-tension assumptions break (different attachment points per structure) — **brought forward to G11** | 4 | Bertrand 2020; Sugiyama 2003; ADR-0021 |
+| **Dynamic spans / vibration (FEM + ROM)** | aeolian vibration, galloping, gust response — later research track behind the static core | 4 | Bertrand 2022; Irvine 1974; ADR-0003 |
 | **Weather, loads & load cases** | wind/ice cases, swing/blowout, IEC 60826 case set (extreme wind, construction, broken wire) | 4, 5 | IEC 60826; ABNT NBR 5422; ADR-0017 |
 | **Thermal rating** | ampacity vs. conductor temperature | 4 | IEEE 738; CIGRE TB 601 |
 | **Geospatial** | DEM/LiDAR ingestion; coarse map + interpolated ~1 m corridor profile; CRS | 1, 2 | tiff/geotiff, proj4rs, las/laz; ADR-0018 |
-| **Routing & POIs** | route geometry over terrain | 2 | — |
-| **Structure library** | families, effective height, application (wind/weight-span) chart | 3, 5 | ADR-0016 |
+| **Routing & POIs** | explicit POI polyline over terrain; profile **derived** from it; angle POIs pin structures | 2, 3 | ADR-0019 |
+| **Structure library** | families, effective height, application (wind/weight-span) chart, **attachment/silhouette geometry** for the tower-elevation view | 3, 5 | ADR-0016/0020 |
 | **Spotting** | structure placement & family selection; cost-minimizing optimization | 3 | ADR-0010/0016; NBR 5422 clearances |
 | **Clearances** | ground/RoW and phase-phase clearance checks | 3, 4 | NBR 5422 |
 | **Structure model** | wind/weight/longitudinal span loads, lattice & guyed-tower checks | 5 | IEC 60826; NBR 5422 |
@@ -88,30 +94,75 @@ summary:
 | **G8** | **Structure-family library** (`model::StructureFamily`: function, height range, **application chart** = piecewise wind-span × weight-span × angle envelope); a `Tower` references a family + height with per-structure overrides. `analysis` checks each placement's loads against its chart and flags violations — the constraint oracle the Phase-5 optimizer will select against. | 2026-06-21 |
 
 These phases deliver a working **multi-wire, multi-section** line tool with a
-structure-family library. The phases below add load cases, precise terrain, and
-field outputs.
+structure-family library. The phases below were **reprioritised on 2026-06-21**
+(ADR-0019–0021) to first make the tool match the real design workflow — route → derived
+profile → spotting with obligatory angle structures, structures seen as real shapes,
+and uneven spans solved by FEM — before the standards/terrain/field-output work that
+now follows them.
 
-## Next — from sections to a standards-checked line (Phases G9–G11)
+## Next — match the real design workflow (Phases G9–G11)
 
-G7/G8 give the line many wires at different tensions, tension sections, and a rated
-structure library. What remains is satisfying a standard's load cases, a precise
-right-of-way profile, and a field stringing table. These phases add exactly that,
-**reusing the validated core** (`change_of_state`, `ruling_span::Section`,
+G7/G8 gave the line many wires, tension sections, and a rated structure library, but
+two things are still wrong about the *workflow*: the profile is treated as the primary
+input (there is no route object), and a structure is "a height" rather than a shape
+whose attachment points make spans uneven. G9–G11 fix exactly that, and the third
+exposes the mechanics the first two make unavoidable.
+
+### G9 — Route, POIs & mandatory angle structures — *stages 2–3* — ADR-0019
+
+- An explicit **`Route`** of kinded **`Poi`** vertices (terminal / angle / crossing /
+  obstacle / constraint); the **ground profile becomes derived** by sampling the
+  terrain along the route polyline (`geo::extract_profile` over `route`), re-extracted
+  when route or terrain changes.
+- **Angle POIs pin an obligatory structure** at their station (≥ angle function;
+  terminals are anchors) — a conductor cannot change plan direction in mid-span.
+- An **editable tower table**: a row edits a structure's function (suspension ↔ angle
+  ↔ anchor), family, and height; changing the function **re-partitions tension
+  sections live** (`tension_sections`) and re-runs `analysis`.
+- `.atldp` `SCHEMA_VERSION` → **3** with a round-trip-tested v2→v3 migration
+  (synthesise a trivial terminal→terminal route from the existing profile endpoints).
+
+### G10 — Structure geometry & tower-elevation view — *stage 3 / GUI* — ADR-0020
+
+- Give a **`StructureFamily`** a **drawable attachment/silhouette geometry**: per
+  conductor position (each phase, each shield wire) a point in the structure's
+  elevation frame, plus the body/crossarm polyline; the per-wire offsets G7 put on
+  `Wire` are reconciled to come from this geometry.
+- A **tower-elevation view** (new egui panel / detachable window, ADR-0012) opened from
+  a tower selection: draws the silhouette with every attachment point labelled by wire
+  and the chosen height/extensions, editable in the structure frame with live feedback
+  into the profile/clearance analysis. "Choosing a structure" becomes inspecting a real
+  shape, not entering a number.
+
+### G11 — Uneven-span FEM section solver — *stage 4* — ADR-0021
+
+- An **uneven-span cable-FEM section kernel** behind the existing `ruling_span::Section`
+  interface in `analysis`, modelling the section across its real, **unequal attachment
+  points** (G10) with insulator swing, so horizontal tension is **solved**, not assumed
+  equal. Reuses `core::conductor` for the change of state — the new code is the
+  structural solve, not new material physics.
+- **The analytic ruling span stays** as the validated oracle; the FEM kernel must agree
+  with it in the level/equal-span limit to an explicit tolerance (ADR-0008), and the
+  per-section kernel choice (analytic vs FEM) is reported. Static uneven-span solve only;
+  the dynamic FEM/ROM track stays later (ADR-0003).
+
+## Then — standards, precise terrain & field outputs (Phases G12–G14)
+
+These reuse the validated core (`change_of_state`, the G11 section solve,
 `structure::structure_loads`) — representational and orchestration work over numerics
 that are already cross-checked.
 
-### G9 — Load cases & standards (IEC 60826) — *stages 4–5* — ADR-0017
+### G12 — Load cases & standards (IEC 60826) — *stages 4–5* — ADR-0017
 
 - A **criteria-set / load-case engine**: each case (everyday, **extreme wind**,
   **construction**, **broken-wire / unbalanced longitudinal**, min-temp) is a
-  change-of-state target on the section ruling span plus a structure-load
-  combination, compared to the conductor tension limits and the structure family's
-  rating.
+  change-of-state target on the section solve plus a structure-load combination,
+  compared to the conductor tension limits and the structure family's rating.
 - IEC 60826 first; NBR 5422 and others slot in as additional criteria sets,
   selectable per project (extends ADR-0004). Generalises the current single
   `wind_pressure_pa`. Reuses the cable solver untouched (ADR-0008 suite still gates).
 
-### G10 — High-precision right-of-way terrain (~1 m) — *stages 1–2* — ADR-0018
+### G13 — High-precision right-of-way terrain (~1 m) — *stages 1–2* — ADR-0018
 
 - **Two-tier terrain:** coarse public DEM for wide-area routing; once the route is
   committed, **densify the corridor** to ~1 m and sample the DEM with **bilinear /
@@ -119,22 +170,23 @@ that are already cross-checked.
   with explicit no-data handling. Leaves a clear hook to substitute surveyed
   **LiDAR** (G4) or imported survey for the corridor without disturbing consumers.
 
-### G11 — Stringing tables & field outputs — *stage 6*
+### G14 — Stringing tables & field outputs — *stage 6*
 
 - Per tension section, a **sag-tension table vs temperature** at the stringing
   tension (and per-span clipping/pulley offsets), emitted alongside the report and
-  sheet. No new numerics — it tabulates the G7 per-section solve through
+  sheet. No new numerics — it tabulates the per-section solve through
   `change_of_state` for the field crew (IEEE 524 stringing practice).
 
-### Then — automatic spotting & advanced mechanics
+### Then — automatic spotting & dynamics
 
 - **Automatic spotting** (the original Phase 5): a cost-minimizing optimizer that
-  **chooses structure families** (G8) and respects load cases (G9) and per-section
+  **chooses structure families** (G8/G10) and respects load cases (G12) and per-section
   tractions (G7), layered on the *same* placement-evaluation functions as manual
-  spotting (ADR-0010) so both paths agree by construction.
-- **Advanced mechanics / FEM** (the original Phase 6, research track): FEM for
-  inclined/uneven spans and dynamics (Bertrand, Sugiyama); reduced-order vibration
-  models. Validated against the analytic core where they overlap (ADR-0003).
+  spotting (ADR-0010) — and keeping the obligatory angle structures (G9) fixed — so both
+  paths agree by construction.
+- **Dynamics / ROM** (research track): FEM + reduced-order models for aeolian
+  vibration, galloping and gust response (Bertrand 2022; Irvine), behind the static
+  core and validated against it in the static limit (ADR-0003).
 
 ## Validation strategy
 
@@ -147,14 +199,19 @@ that are already cross-checked.
   source; the closed-form catenary identities (Irvine) are a second independent
   oracle. The retired Python `core/` lives on as committed cross-check fixtures
   (`crates/atldp-core/tests/fixtures/`).
-- The G7–G11 work is **additive over these validated numerics** — multi-wire,
-  sections, load cases, and stringing tables orchestrate the same solver, so the
-  existing suite keeps gating correctness; new tests cover the orchestration. The
-  delivered G7/G8 orchestration is covered in `atldp-model` (section partitioning,
-  v1→v2 schema migration, chart envelopes, multi-wire fan-out); G9–G11 add load-case
-  and table-generation tests in the same vein.
-- Cross-check the analytic core against the FEM track in their common domain. Track
-  tolerances explicitly; treat a tolerance regression as a build failure.
+- Most G7–G14 work is **additive over these validated numerics** — multi-wire,
+  sections, the route/POI model, load cases, and stringing tables orchestrate the same
+  solver, so the existing suite keeps gating correctness and new tests cover the
+  orchestration (and the v2→v3 migration). The delivered G7/G8 orchestration is covered
+  in `atldp-model` (section partitioning, v1→v2 schema migration, chart envelopes,
+  multi-wire fan-out).
+- **G11 is the exception**: the uneven-span FEM section solver introduces *new*
+  numerics into `atldp-core` and must earn its place under ADR-0008. It is gated by
+  **agreement with the analytic ruling-span core in their overlapping domain** (level,
+  equal spans, free-swinging insulators) to an explicit tolerance, plus external
+  FEM/reference cases (e.g. OTLS-Models uneven configurations) where available. Track
+  tolerances explicitly; treat a tolerance regression as a build failure. The
+  later dynamics/ROM track is likewise validated against the static core in its limit.
 
 ## Open questions (to resolve via ADRs / discussion)
 
@@ -173,7 +230,17 @@ that are already cross-checked.
   wind span, plus a deviation-angle cap); charts are the family's own data, shipping
   as a small built-in library (`StructureFamily::built_in_library`) and editable per
   project (no standard tables redistributed — ADR-0004).
-- **1 m corridor source (G10):** how far DEM interpolation is trusted before a
+- **Route schema (G9):** the `Route`/`Poi` representation and the v2→v3 migration —
+  how POI kinds map to pinned structures, and how derived `ground_profile` staleness is
+  tracked (ADR-0019).
+- **FEM kernel selection (G11):** the precise geometric criterion that switches a
+  section from the analytic ruling span to the FEM solver (span-unevenness ratio,
+  inclination, operating temperature), and the validated agreement tolerance between
+  them (ADR-0021/0008).
+- **Structure geometry data (G10):** the representation of a family's attachment /
+  silhouette geometry, and how it reconciles with the per-`Wire` offsets introduced in
+  G7 (ADR-0020).
+- **1 m corridor source (G13):** how far DEM interpolation is trusted before a
   surveyed LiDAR/contour source is required, and the ingestion path for it.
 - Maturity of the pure-Rust geospatial stack (`proj4rs` CRS coverage, `laz-rs` decode
   speed) — validated in G3/G4, with a documented `gdal` fallback (ADR-0013).

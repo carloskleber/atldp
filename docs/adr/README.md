@@ -13,13 +13,17 @@ ADR-0015–0018 (2026-06-20) trace the product step from the single-conductor G6
 model to a real multi-wire, multi-section line design (tension sections, structure
 families, standards load cases, and a precise right-of-way profile). **ADR-0015 and
 ADR-0016 are accepted and implemented** (G7/G8, 2026-06-21); ADR-0017–0018 remain
-proposed. See phases G7–G11 in the [implementation plan](../IMPLEMENTATION_PLAN.md).
+proposed. ADR-0019–0021 (2026-06-21) reprioritise the near-term roadmap around the
+real design workflow: an explicit route/POI model with obligatory angle structures
+(0019), the tower-elevation view with real attachment geometry (0020), and bringing
+the FEM section solver forward for uneven spans (0021, amending the *timing* of
+ADR-0003). See phases G7–G14 in the [implementation plan](../IMPLEMENTATION_PLAN.md).
 
 | ADR | Title | Status |
 | --- | --- | --- |
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Proposed |
 | [0002](0002-python-core-with-separated-layers.md) | Python computational core with separated layers | Superseded by 0011 |
-| [0003](0003-analytic-sag-tension-baseline-before-fem.md) | Analytic sag-tension baseline before FEM | Accepted |
+| [0003](0003-analytic-sag-tension-baseline-before-fem.md) | Analytic sag-tension baseline before FEM | Accepted (timing amended by 0021) |
 | [0004](0004-standards-baseline.md) | Standards baseline (IEEE / CIGRE / ABNT) | Proposed |
 | [0005](0005-local-dem-as-geospatial-source-of-truth.md) | Local DEM as geospatial source of truth | Proposed (tooling refined by 0013) |
 | [0006](0006-defer-gui-headless-first.md) | Headless-first; defer the GUI decision | Resolved by 0012 |
@@ -35,3 +39,6 @@ proposed. See phases G7–G11 in the [implementation plan](../IMPLEMENTATION_PLA
 | [0016](0016-structure-family-library-and-application-chart.md) | Structure family library and application chart | Accepted (G8) |
 | [0017](0017-load-case-criteria-set-engine.md) | Load-case / criteria-set engine (IEC 60826) | Proposed |
 | [0018](0018-two-tier-terrain-precision.md) | Two-tier terrain precision (interpolated ~1 m RoW) | Proposed |
+| [0019](0019-route-poi-model-and-mandatory-angle-structures.md) | Route / POI model and mandatory structures at angle points | Proposed |
+| [0020](0020-structure-geometry-and-tower-elevation-view.md) | Structure geometry and the tower-elevation view | Proposed |
+| [0021](0021-bring-fem-forward-for-uneven-spans.md) | Bring FEM forward as the uneven-span section solver | Proposed |
