@@ -9,10 +9,11 @@ hygiene); ADR-0003 and ADR-0008 were **accepted** and implemented in Phase 1 (th
 sag-tension core). ADR-0011–0014 (**accepted**, 2026-06-15) commit the production
 app to a native Rust desktop CAD stack: ADR-0011 supersedes ADR-0002, ADR-0012
 resolves ADR-0006, and ADR-0013 refines the geospatial tooling of ADR-0005.
-ADR-0015–0018 (**proposed**, 2026-06-20) trace the next product step — from the
-single-conductor G6 model to a real multi-wire, multi-section line design (tension
-sections, structure families, standards load cases, and a precise right-of-way
-profile); see phases G7–G11 in the [implementation plan](../IMPLEMENTATION_PLAN.md).
+ADR-0015–0018 (2026-06-20) trace the product step from the single-conductor G6
+model to a real multi-wire, multi-section line design (tension sections, structure
+families, standards load cases, and a precise right-of-way profile). **ADR-0015 and
+ADR-0016 are accepted and implemented** (G7/G8, 2026-06-21); ADR-0017–0018 remain
+proposed. See phases G7–G11 in the [implementation plan](../IMPLEMENTATION_PLAN.md).
 
 | ADR | Title | Status |
 | --- | --- | --- |
@@ -30,7 +31,7 @@ profile); see phases G7–G11 in the [implementation plan](../IMPLEMENTATION_PLA
 | [0012](0012-desktop-gui-wgpu-egui.md) | Desktop GUI and rendering: winit + wgpu + egui | Accepted |
 | [0013](0013-pure-rust-geospatial-stack.md) | Pure-Rust geospatial stack | Accepted |
 | [0014](0014-python-core-retirement-criteria.md) | Python core retirement criteria | Accepted |
-| [0015](0015-multi-wire-conductor-set-and-tension-sections.md) | Multi-wire conductor set and tension sections | Proposed |
-| [0016](0016-structure-family-library-and-application-chart.md) | Structure family library and application chart | Proposed |
+| [0015](0015-multi-wire-conductor-set-and-tension-sections.md) | Multi-wire conductor set and tension sections | Accepted (G7) |
+| [0016](0016-structure-family-library-and-application-chart.md) | Structure family library and application chart | Accepted (G8) |
 | [0017](0017-load-case-criteria-set-engine.md) | Load-case / criteria-set engine (IEC 60826) | Proposed |
 | [0018](0018-two-tier-terrain-precision.md) | Two-tier terrain precision (interpolated ~1 m RoW) | Proposed |

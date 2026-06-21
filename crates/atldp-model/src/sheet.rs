@@ -26,14 +26,27 @@ const PROFILE_TOP: f64 = 60.0;
 const PLAN_HEIGHT: f64 = 70.0;
 const GAP: f64 = 50.0;
 
-/// Render a plan-&-profile SVG sheet for `project` at the default exaggeration.
+/// Render a plan-&-profile SVG sheet for `project` at the default exaggeration,
+/// plotting every wire.
 pub fn plan_profile_svg(project: &Project) -> String {
-    plan_profile_svg_with(project, &analyze(project), DEFAULT_VERTICAL_EXAGGERATION)
+    plan_profile_svg_with(
+        project,
+        &analyze(project),
+        DEFAULT_VERTICAL_EXAGGERATION,
+        false,
+    )
 }
 
 /// Render the sheet from a pre-computed [`Analysis`] at a given vertical
-/// exaggeration (`>= 1.0`).
-pub fn plan_profile_svg_with(project: &Project, analysis: &Analysis, vertical_exag: f64) -> String {
+/// exaggeration (`>= 1.0`). With `lowest_wire_only`, only the governing
+/// (lowest-attached) wire is drawn — the view for reading ground clearance (G7).
+pub fn plan_profile_svg_with(
+    project: &Project,
+    analysis: &Analysis,
+    vertical_exag: f64,
+    lowest_wire_only: bool,
+) -> String {
+    let lowest = project.lowest_wire();
     let plot_w = WIDTH - MARGIN_L - MARGIN_R;
 
     // ── world bounds ──
@@ -52,9 +65,18 @@ pub fn plan_profile_svg_with(project: &Project, analysis: &Analysis, vertical_ex
             note(s.distance_m, s.elevation_m);
         }
     }
+    // Vertical offsets of the lowest/highest wire widen the elevation window so
+    // every plotted catenary (and the shield wire above) stays inside the frame.
+    let (off_lo, off_hi) = project
+        .wires
+        .iter()
+        .fold((0.0_f64, 0.0_f64), |(lo, hi), w| {
+            (lo.min(w.vertical_offset_m), hi.max(w.vertical_offset_m))
+        });
     for t in &project.towers {
         note(t.distance_m, t.ground_elevation_m);
-        note(t.distance_m, t.attachment_elevation_m());
+        note(t.distance_m, t.attachment_elevation_m() + off_lo);
+        note(t.distance_m, t.attachment_elevation_m() + off_hi);
     }
     if !d_min.is_finite() {
         // Nothing to draw — emit a minimal valid placeholder sheet.
@@ -154,16 +176,25 @@ pub fn plan_profile_svg_with(project: &Project, analysis: &Analysis, vertical_ex
         );
     }
 
-    // ── conductors (clearance-coloured) ──
+    // ── conductors (clearance-coloured), one catenary per wire × span ──
     for sp in &analysis.spans {
+        if lowest_wire_only && Some(sp.wire) != lowest {
+            continue;
+        }
+        let Some(wire) = project.wires.get(sp.wire) else {
+            continue;
+        };
         let t1 = &project.towers[sp.from_tower];
         let t2 = &project.towers[sp.to_tower];
-        let pts = span_catenary_points(project, t1, t2, SAMPLES_PER_SPAN);
+        let tension = project.wire_tension(sp.wire, sp.section);
+        let pts = span_catenary_points(t1, t2, wire, tension, SAMPLES_PER_SPAN);
         if pts.len() < 2 {
             continue;
         }
         let colour = if sp.min_clearance_m.is_some() && !sp.clearance_ok {
             "#d62828"
+        } else if wire.role == crate::WireRole::Shield {
+            "#888888"
         } else {
             "#1f8fbf"
         };
@@ -330,16 +361,19 @@ mod tests {
                 distance_m: 0.0,
                 ground_elevation_m: 100.0,
                 attachment_height_m: 20.0,
+                ..Default::default()
             },
             Tower {
                 distance_m: 400.0,
                 ground_elevation_m: 60.0,
                 attachment_height_m: 20.0,
+                ..Default::default()
             },
             Tower {
                 distance_m: 800.0,
                 ground_elevation_m: 110.0,
                 attachment_height_m: 20.0,
+                ..Default::default()
             },
         ];
         p
@@ -363,6 +397,24 @@ mod tests {
         let svg = plan_profile_svg(&p);
         assert!(svg.contains("Nothing to draw"));
         assert!(svg.trim_end().ends_with("</svg>"));
+    }
+
+    #[test]
+    fn lowest_wire_only_draws_fewer_catenaries() {
+        let mut p = project();
+        p.wires = vec![
+            crate::Wire::phase("A", crate::ConductorSpec::drake(), 0.0, 0.0),
+            crate::Wire::shield("S", crate::ConductorSpec::ehs_shield(), 6.0, 0.0),
+        ];
+        let a = analyze(&p);
+        let all = plan_profile_svg_with(&p, &a, DEFAULT_VERTICAL_EXAGGERATION, false);
+        let low = plan_profile_svg_with(&p, &a, DEFAULT_VERTICAL_EXAGGERATION, true);
+        let count = |svg: &str, needle: &str| svg.matches(needle).count();
+        // Two wires × two spans drawn when showing all; half that for lowest only.
+        assert!(count(&all, "fill='none' stroke='#") > count(&low, "fill='none' stroke='#"));
+        // The shield wire is drawn in grey only in the all-wires view.
+        assert!(all.contains("stroke='#888888'"));
+        assert!(!low.contains("stroke='#888888'"));
     }
 
     #[test]

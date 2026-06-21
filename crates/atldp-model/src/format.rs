@@ -48,23 +48,69 @@ pub fn to_atldp_string(project: &Project) -> Result<String, FormatError> {
 }
 
 /// Parse `.atldp` JSON text into a [`Project`], rejecting a future schema version
-/// and migrating older ones forward (none yet — v1 is the first).
+/// and migrating older ones forward.
+///
+/// Migration is performed on the raw JSON *before* it is deserialized into the
+/// current [`Project`] shape, because a breaking schema change (e.g. v1's single
+/// `conductor` → v2's `wires`) renames or drops fields the typed struct no longer
+/// carries.
 pub fn from_atldp_str(text: &str) -> Result<Project, FormatError> {
-    let project: Project = serde_json::from_str(text).map_err(FormatError::Parse)?;
-    if project.schema_version > SCHEMA_VERSION {
+    let mut value: serde_json::Value = serde_json::from_str(text).map_err(FormatError::Parse)?;
+    let found = value
+        .get("schema_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as u32;
+    if found > SCHEMA_VERSION {
         return Err(FormatError::UnsupportedVersion {
-            found: project.schema_version,
+            found,
             supported: SCHEMA_VERSION,
         });
     }
-    Ok(migrate(project))
+    migrate_value(&mut value, found);
+    serde_json::from_value(value).map_err(FormatError::Parse)
 }
 
-/// Migrate an older-schema project up to [`SCHEMA_VERSION`]. v1 is the first
-/// schema, so this is currently the identity; it exists as the seam future
-/// versions hook into.
-fn migrate(project: Project) -> Project {
-    project
+/// Migrate raw `.atldp` JSON from `from_version` up to [`SCHEMA_VERSION`], in
+/// place. Each step is the seam a future schema bump hooks into.
+fn migrate_value(value: &mut serde_json::Value, from_version: u32) {
+    if from_version < 2 {
+        migrate_v1_to_v2(value);
+    }
+}
+
+/// v1 → v2 (G7/G8): wrap the single `conductor` strung at
+/// `parameters.horizontal_tension_n` as a one-element `wires` set (a phase wire
+/// at zero offset), and stamp the new `schema_version`. Untyped v1 towers default
+/// to suspension, so the whole line forms a single tension section — reproducing
+/// the v1 single-conductor results exactly.
+fn migrate_v1_to_v2(value: &mut serde_json::Value) {
+    let serde_json::Value::Object(obj) = value else {
+        return;
+    };
+    if obj.get("wires").is_none() {
+        let tension = obj
+            .get("parameters")
+            .and_then(|p| p.get("horizontal_tension_n"))
+            .and_then(|t| t.as_f64())
+            .unwrap_or(30_000.0);
+        if let Some(conductor) = obj.remove("conductor") {
+            obj.insert(
+                "wires".to_string(),
+                serde_json::json!([{
+                    "name": "Phase",
+                    "role": "phase",
+                    "conductor": conductor,
+                    "vertical_offset_m": 0.0,
+                    "lateral_offset_m": 0.0,
+                    "tension_n": tension,
+                }]),
+            );
+        }
+    }
+    obj.insert(
+        "schema_version".to_string(),
+        serde_json::json!(SCHEMA_VERSION),
+    );
 }
 
 /// Write a project to `path` as `.atldp` JSON.
@@ -108,16 +154,19 @@ mod tests {
                 distance_m: 0.0,
                 ground_elevation_m: 100.0,
                 attachment_height_m: 15.0,
+                ..Default::default()
             },
             Tower {
                 distance_m: 400.0,
                 ground_elevation_m: 85.0,
                 attachment_height_m: 18.0,
+                ..Default::default()
             },
             Tower {
                 distance_m: 1000.0,
                 ground_elevation_m: 120.0,
                 attachment_height_m: 15.0,
+                ..Default::default()
             },
         ];
         p
@@ -134,6 +183,46 @@ mod tests {
         assert_eq!(back.ground_profile.len(), 3);
         assert!((back.parameters.horizontal_tension_n - 31_500.0).abs() < 1e-9);
         assert!((back.towers[1].attachment_height_m - 18.0).abs() < 1e-9);
+    }
+
+    /// A v1 project (single `conductor`, untyped towers) loads as a one-wire,
+    /// single-section v2 project that reproduces its inputs (ADR-0015 migration).
+    #[test]
+    fn migrates_v1_single_conductor_to_wire_set() {
+        let v1 = serde_json::json!({
+            "schema_version": 1,
+            "metadata": { "name": "Legacy 1-wire", "notes": "" },
+            "conductor": {
+                "name": "ACSR Drake 26/7",
+                "unit_weight_n_per_m": 15.97,
+                "diameter_m": 0.0281,
+                "rated_strength_n": 140_100.0
+            },
+            "parameters": {
+                "horizontal_tension_n": 31_500.0,
+                "attachment_height_m": 15.0,
+                "min_clearance_m": 8.0,
+                "wind_pressure_pa": 700.0
+            },
+            "terrain": null,
+            "towers": [
+                { "distance_m": 0.0, "ground_elevation_m": 100.0, "attachment_height_m": 15.0 },
+                { "distance_m": 400.0, "ground_elevation_m": 100.0, "attachment_height_m": 15.0 }
+            ]
+        })
+        .to_string();
+
+        let p = from_atldp_str(&v1).unwrap();
+        assert_eq!(p.schema_version, SCHEMA_VERSION);
+        assert_eq!(p.wires.len(), 1);
+        let w = &p.wires[0];
+        assert_eq!(w.role, crate::WireRole::Phase);
+        assert_eq!(w.conductor.name, "ACSR Drake 26/7");
+        assert!((w.tension_n - 31_500.0).abs() < 1e-9);
+        assert_eq!(w.vertical_offset_m, 0.0);
+        // Untyped towers ⇒ all suspension ⇒ exactly one tension section.
+        assert!(p.towers.iter().all(|t| !t.function.is_anchor()));
+        assert_eq!(crate::tension_sections(&p.towers).len(), 1);
     }
 
     #[test]

@@ -8,13 +8,13 @@ interactive 2D/3D views and a small optimized binary (ADR-0011/0012/0013). The
 engineering models were first validated in a Python prototype; the Rust core now
 reproduces it and is additionally cross-checked against the OTLS-Models reference,
 so the **Python `core/` has been retired** (ADR-0014). The native track has
-reached G6 — manual spotting, sag-tension, structure loads, calculation reports,
-plan-&-profile sheets, and the open `.atldp` project format — for a single
-conductor at a single tension. Phases **G7–G11** (ADR-0015–0018) are the next traced
-steps that grow it into a real multi-wire, multi-section line: tension sections with
-per-stretch traction, the full wire set (phases + shield wires), a structure-family
-library, standards load cases (IEC 60826), a precise ~1 m right-of-way profile, and
-field stringing tables.
+reached G8 — manual spotting, sag-tension, structure loads, calculation reports,
+plan-&-profile sheets, and the open `.atldp` project format, now over a real
+**multi-wire set** (phases + shield wires) split into **tension sections** at the
+anchor structures, with a **structure-family library** whose application charts gate
+each placement (G7/G8, ADR-0015/0016; `.atldp` schema v2 with a v1→v2 migration).
+Phases **G9–G11** (ADR-0017–0018) are the next traced steps: standards load cases
+(IEC 60826), a precise ~1 m right-of-way profile, and field stringing tables.
 
 ---
 
@@ -85,16 +85,16 @@ national standards.
    LiDAR, spotting, and drafting (phases **G0–G6**; ADR-0011/0012/0013). Maps onto
    the same pipeline stages 1–6 for a single conductor.
 4. **Real line model** (current) — grow the single-conductor tool into a real
-   project: tension sections + multi-wire set (G7), structure-family library (G8),
-   standards load cases (G9), a ~1 m right-of-way profile (G10), and field stringing
-   tables (G11) — ADR-0015–0018.
+   project: tension sections + multi-wire set (**G7, done**), structure-family
+   library (**G8, done**), standards load cases (G9), a ~1 m right-of-way profile
+   (G10), and field stringing tables (G11) — ADR-0015–0018.
 5. **Automatic spotting** — the cost-minimizing optimizer for stage 3, selecting
    structure families and respecting load cases and section tractions.
 
 The product workflow (pipeline stages) is unchanged; only the implementation
 language moves from Python to Rust. See
 [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for the native build
-track (G0–G6).
+track (G0–G8).
 
 See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for the detailed,
 phased plan, and [docs/adr/](docs/adr/) for the architectural decisions and their

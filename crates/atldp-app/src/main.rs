@@ -402,7 +402,15 @@ impl AppState {
     /// Snapshot the current spotting/terrain/parameters into a serializable project.
     fn build_project(&self) -> Project {
         let mut p = Project::new("ATLDP line");
-        p.conductor = ConductorSpec::drake();
+        // The GUI edits a single representative phase wire (G5/G6 behaviour); the
+        // multi-wire set (G7) is authored in the file or via the model API.
+        p.wires = vec![atldp_model::Wire::phase(
+            "Phase",
+            ConductorSpec::drake(),
+            0.0,
+            0.0,
+        )
+        .strung(self.h_tension_n)];
         p.parameters.horizontal_tension_n = self.h_tension_n;
         p.parameters.attachment_height_m = self.attachment_height_m;
         p.parameters.min_clearance_m = self.min_clearance_m;
@@ -426,7 +434,12 @@ impl AppState {
     /// Apply a loaded project's towers and parameters onto the current session
     /// (the terrain itself stays as loaded from its HGT tile).
     fn apply_project(&mut self, p: Project) {
-        self.h_tension_n = p.parameters.horizontal_tension_n;
+        // Read the representative wire's tension if present, else the parameter.
+        self.h_tension_n = p
+            .wires
+            .first()
+            .map(|w| w.tension_n)
+            .unwrap_or(p.parameters.horizontal_tension_n);
         self.attachment_height_m = p.parameters.attachment_height_m;
         self.min_clearance_m = p.parameters.min_clearance_m;
         self.wind_pressure_pa = p.parameters.wind_pressure_pa;
@@ -469,6 +482,7 @@ impl AppState {
             &project,
             &analysis::analyze(&project),
             self.cam2d.vertical_exag as f64,
+            false,
         );
         self.status = match std::fs::write(SHEET_PATH, svg) {
             Ok(()) => format!("Wrote plan & profile sheet → {SHEET_PATH}"),
@@ -811,11 +825,10 @@ impl AppState {
                                 ui.label("Vert (kN)");
                                 ui.end_row();
                                 for st in &structure_results {
-                                    let l = &st.loads;
                                     ui.label(format!("T{}", st.tower + 1));
-                                    ui.label(format!("{:.0}", l.wind_span_m));
-                                    ui.label(format!("{:.0}", l.weight_span_m));
-                                    ui.label(format!("{:.1}", l.vertical_load_n / 1000.0));
+                                    ui.label(format!("{:.0}", st.wind_span_m));
+                                    ui.label(format!("{:.0}", st.weight_span_m));
+                                    ui.label(format!("{:.1}", st.vertical_load_n / 1000.0));
                                     ui.end_row();
                                 }
                             });
@@ -1064,6 +1077,7 @@ impl Viewer<'_> {
                             distance_m: world_x,
                             ground_elevation_m: ground_elev,
                             attachment_height_m: self.attachment_height_m,
+                            ..Default::default()
                         });
                         // Keep sorted by distance.
                         self.towers

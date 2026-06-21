@@ -1,6 +1,6 @@
 # ADR-0016 — Structure family library and application (usage) chart
 
-- Status: Proposed
+- Status: Accepted (implemented in G8, 2026-06-21)
 - Date: 2026-06-20
 - Builds on: [ADR-0010](0010-manual-spotting-before-cost-optimization.md) (spotting),
   [ADR-0015](0015-multi-wire-conductor-set-and-tension-sections.md) (structure typing)

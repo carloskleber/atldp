@@ -1,6 +1,6 @@
 # ADR-0015 — Multi-wire conductor set and tension sections
 
-- Status: Proposed
+- Status: Accepted (implemented in G7, 2026-06-21)
 - Date: 2026-06-20
 - Builds on: [ADR-0009](0009-staged-design-pipeline-and-project-model.md) (project
   model), [ADR-0010](0010-manual-spotting-before-cost-optimization.md) (spotting)

@@ -2,8 +2,8 @@
 
 This translates the project's goals (see [README](../README.md)) into a phased,
 verifiable plan, and points to the architectural decisions that back it (see
-[adr/](adr/)). It is a living document: phases **G0–G6 are delivered**, phases
-**G7–G11** are the next traced steps (ADR-0015–0018).
+[adr/](adr/)). It is a living document: phases **G0–G8 are delivered**, phases
+**G9–G11** are the next traced steps (ADR-0017–0018).
 
 > **Substrate (2026-06-15).** The product is a desktop CAD application — interactive
 > 2D/3D views (terrain, route, towers, conductors, LiDAR point clouds), high
@@ -65,7 +65,7 @@ The pipeline rests on these largely independent computational modules:
 | **Structure model** | wind/weight/longitudinal span loads, lattice & guyed-tower checks | 5 | IEC 60826; NBR 5422 |
 | **Drafting, reporting & stringing table** | plan & profile sheets, calculation reports, field stringing chart | 6 | IEEE 524; ADR-0009 |
 
-## Delivered — native build track (Phases G0–G6, complete)
+## Delivered — native build track (Phases G0–G8, complete)
 
 The production app is built natively in Rust (ADR-0011/0012/0013). The sag-tension
 core (stage 4) was built first — highest risk, highest value, and the validation
@@ -84,44 +84,21 @@ summary:
 | **G4** | LiDAR point-cloud engine (stage 1, advanced) — **⏸ postponed** until a surveyed dataset is available to validate against. | — |
 | **G5** | Manual spotting + in-GUI sag-tension (stages 3–4): click-to-place towers, live catenary, colour-coded ground-clearance check, tower/span tables. | 2026-06-16 |
 | **G6** | Structure loads (`core::structure`: signed wind/weight spans + conductor loads), the open versioned-JSON **`.atldp`** format (`atldp-model`), and drafting (Markdown `report` + SVG plan-&-profile `sheet`) from one shared `analysis` pass. | 2026-06-20 |
+| **G7** | Multi-**wire** set (`model::Wire`: phase + shield wires, per-wire conductor/offset/tension) and **tension sections** from structure-function typing (`tension_sections`, per-section ruling span). `analysis` fans out over (wire × section); `report`/`sheet` plot **every wire** with a **lowest-wire** clearance mode. `.atldp` `SCHEMA_VERSION` → **2** with a round-trip-tested v1→v2 migration. | 2026-06-21 |
+| **G8** | **Structure-family library** (`model::StructureFamily`: function, height range, **application chart** = piecewise wind-span × weight-span × angle envelope); a `Tower` references a family + height with per-structure overrides. `analysis` checks each placement's loads against its chart and flags violations — the constraint oracle the Phase-5 optimizer will select against. | 2026-06-21 |
 
-These phases deliver a working **single-conductor, single-tension** line tool. The
-phases below grow it into a real multi-wire, multi-section project tool.
+These phases deliver a working **multi-wire, multi-section** line tool with a
+structure-family library. The phases below add load cases, precise terrain, and
+field outputs.
 
-## Next — from a single conductor to a real line (Phases G7–G11)
+## Next — from sections to a standards-checked line (Phases G9–G11)
 
-The G6 model strings one conductor at one global tension. A real line has many wires
-at different tensions, is split into tension sections by anchor structures, is built
-from a library of structure families, must satisfy a standard's load cases, needs a
-precise right-of-way profile, and ends in a field stringing table. These phases add
-exactly that, **reusing the validated core** (`change_of_state`,
-`ruling_span::Section`, `structure::structure_loads`) — they are representational and
-orchestration work over numerics that are already cross-checked.
-
-### G7 — Tension sections + multi-wire conductor set — *stages 3–4* — ADR-0015
-
-- **Structure typing** (suspension / angle / anchor-dead-end) on each spotted
-  structure; group the ordered structures into **tension sections** at every anchor.
-- Feed each section's spans to `atldp_core::ruling_span::Section` (already built) for
-  a **per-section ruling span and stringing tension** — the home for the ruling span
-  in the product, and the mechanism for **different tractions per stretch**.
-- Replace the single `Project.conductor` + `parameters.horizontal_tension_n` with a
-  **wire set**: N phase conductors (3 · circuits) plus shield/ground wire(s), each
-  with its own conductor spec, attachment geometry, and per-section tension. **Plot
-  every wire**; add a **"lowest wire only"** mode for reading ground clearance.
-- `.atldp` `SCHEMA_VERSION` → 2; migrate a v1 project as a one-wire, single-section
-  case (round-trip tested) via the existing `format::from_atldp_str` seam.
-
-### G8 — Structure family library & editable structures — *stage 3* — ADR-0016
-
-- A `StructureFamily`: name, function, **effective height** (over a height range),
-  per-wire attachment offsets, and an **application/usage chart** (allowable
-  wind-span × weight-span × angle envelope).
-- A spotted `Tower` **references a family + height** and may **override** the
-  effective height / chart — edit a structure after spotting.
-- Manual spotting checks each placement's wind/weight spans
-  (`structure::structure_loads`) against the family chart and flags violations; the
-  later optimizer (Phase 5) **selects** the family from the same check.
+G7/G8 give the line many wires at different tensions, tension sections, and a rated
+structure library. What remains is satisfying a standard's load cases, a precise
+right-of-way profile, and a field stringing table. These phases add exactly that,
+**reusing the validated core** (`change_of_state`, `ruling_span::Section`,
+`structure::structure_loads`) — representational and orchestration work over numerics
+that are already cross-checked.
 
 ### G9 — Load cases & standards (IEC 60826) — *stages 4–5* — ADR-0017
 
@@ -172,8 +149,10 @@ orchestration work over numerics that are already cross-checked.
   (`crates/atldp-core/tests/fixtures/`).
 - The G7–G11 work is **additive over these validated numerics** — multi-wire,
   sections, load cases, and stringing tables orchestrate the same solver, so the
-  existing suite keeps gating correctness; new tests cover the orchestration
-  (section partitioning, schema migration, chart envelopes, table generation).
+  existing suite keeps gating correctness; new tests cover the orchestration. The
+  delivered G7/G8 orchestration is covered in `atldp-model` (section partitioning,
+  v1→v2 schema migration, chart envelopes, multi-wire fan-out); G9–G11 add load-case
+  and table-generation tests in the same vein.
 - Cross-check the analytic core against the FEM track in their common domain. Track
   tolerances explicitly; treat a tolerance regression as a build failure.
 
@@ -184,10 +163,16 @@ orchestration work over numerics that are already cross-checked.
 - ~~An open project file format.~~ **Resolved:** versioned JSON `.atldp` (G6).
   Interoperability with a *specific commercial* format — and its legal footing —
   remains open.
-- **Multi-wire schema migration (G7):** the v1 → v2 upgrade path and how to default
-  per-section, per-wire tractions for an imported single-conductor project.
-- **Application-chart data (G8):** representation of the wind/weight-span envelope and
-  where a project's family charts come from (built-in set vs. user/utility import).
+- ~~**Multi-wire schema migration (G7):** the v1 → v2 upgrade path.~~ **Resolved:**
+  `format::from_atldp_str` migrates the raw JSON before typing it — v1's single
+  `conductor` at `horizontal_tension_n` becomes a one-element phase `wires` set, and
+  untyped towers default to suspension (one tension section), reproducing v1 results
+  (round-trip tested).
+- ~~**Application-chart data (G8):** representation of the wind/weight-span envelope.~~
+  **Resolved:** a piecewise `ApplicationChart` (weight-span band interpolated over
+  wind span, plus a deviation-angle cap); charts are the family's own data, shipping
+  as a small built-in library (`StructureFamily::built_in_library`) and editable per
+  project (no standard tables redistributed — ADR-0004).
 - **1 m corridor source (G10):** how far DEM interpolation is trusted before a
   surveyed LiDAR/contour source is required, and the ingestion path for it.
 - Maturity of the pure-Rust geospatial stack (`proj4rs` CRS coverage, `laz-rs` decode
