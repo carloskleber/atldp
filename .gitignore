@@ -59,3 +59,9 @@ Thumbs.db
 .idea/
 .vscode/
 .history/
+
+# --- Local Claude Code config / personal notes (public repo: keep private) ---
+# settings.local.json points at an external, copyrighted reference library;
+# CLAUDE.local.md describes it. Neither may be committed.
+.claude/settings.local.json
+CLAUDE.local.md

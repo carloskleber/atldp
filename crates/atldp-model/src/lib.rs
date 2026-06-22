@@ -29,7 +29,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - **v1** (G6): single [`ConductorSpec`] at one global tension, untyped towers.
 /// - **v2** (G7/G8): a [`Wire`] set, structure-function typing + tension sections,
 ///   and a [`StructureFamily`] library with application charts.
-pub const SCHEMA_VERSION: u32 = 2;
+/// - **v3** (G9/G10): an explicit [`Route`] of [`Poi`] vertices the profile is
+///   derived from, the per-tower [`origin_poi`](Tower::origin_poi) link, and the
+///   family [`AttachmentGeometry`] that draws the tower-elevation view.
+pub const SCHEMA_VERSION: u32 = 3;
 
 // ── project model ───────────────────────────────────────────────────────────────
 
@@ -62,7 +65,15 @@ pub struct Project {
     pub section_tensions: Vec<SectionTension>,
     /// Provenance of the terrain the route was spotted on (optional).
     pub terrain: Option<TerrainRef>,
-    /// Ground elevation sampled along the route, ordered by distance.
+    /// The explicit route the line follows: an ordered POI polyline (G9). The
+    /// [`ground_profile`](Project::ground_profile) is *derived* by sampling the
+    /// terrain along it (ADR-0019), so it must be re-extracted whenever the route
+    /// or terrain changes. `None` for a project that predates the route model.
+    #[serde(default)]
+    pub route: Option<Route>,
+    /// Ground elevation sampled along the route, ordered by distance. **Derived**
+    /// from [`route`](Project::route) + terrain since G9 (ADR-0019); stored so the
+    /// checks/reports/sheets are reproducible without re-reading the raster.
     #[serde(default)]
     pub ground_profile: Vec<ProfileSample>,
     /// Spotted structures, ordered by distance along the route.
@@ -86,6 +97,7 @@ impl Project {
             families: Vec::new(),
             section_tensions: Vec::new(),
             terrain: None,
+            route: None,
             ground_profile: Vec::new(),
             towers: Vec::new(),
         }
@@ -129,6 +141,21 @@ impl Project {
             .map(|s| s.tension_n)
             .or_else(|| self.wires.get(wire).map(|w| w.tension_n))
             .unwrap_or(self.parameters.horizontal_tension_n)
+    }
+
+    /// Reconcile the wire attachment offsets to the geometry of family
+    /// `family_index` (G10, ADR-0020): the family geometry is the source of truth
+    /// for *where* a wire attaches, so copy each attachment point's offsets onto
+    /// the matching wire (paired in order); each wire keeps its conductor spec and
+    /// tension. Extra wires beyond the geometry's attachments are left untouched.
+    pub fn reconcile_wire_offsets(&mut self, family_index: usize) {
+        let Some(fam) = self.families.get(family_index) else {
+            return;
+        };
+        for (wire, att) in self.wires.iter_mut().zip(fam.geometry.attachments.iter()) {
+            wire.vertical_offset_m = att.vertical_offset_m;
+            wire.lateral_offset_m = att.lateral_offset_m;
+        }
     }
 
     /// Ground elevation at a route distance by linear interpolation over
@@ -341,6 +368,136 @@ pub struct ProfileSample {
     pub elevation_m: f64,
 }
 
+// ── route & points of interest (G9) ──────────────────────────────────────────────
+
+/// The kind of a route point of interest (G9, ADR-0019).
+///
+/// A POI's kind decides whether it **obliges a structure** at its station: a
+/// conductor cannot turn in mid-span, so a [`Terminal`](PoiKind::Terminal) pins an
+/// anchor and an [`Angle`](PoiKind::Angle) pins at least an angle structure. The
+/// other kinds are routing waypoints that do not, by themselves, force a tower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PoiKind {
+    /// A line terminal (start or end of the route).
+    #[default]
+    Terminal,
+    /// A point where the line changes plan direction.
+    Angle,
+    /// A crossing the route must pass (road, river, railway, another line).
+    Crossing,
+    /// An obstacle the route is steered around.
+    Obstacle,
+    /// A generic routing constraint / waypoint.
+    Constraint,
+}
+
+impl PoiKind {
+    /// The minimum [`StructureFunction`] a POI of this kind **obliges** at its
+    /// station, or `None` if it pins no structure (ADR-0019). A structure placed
+    /// at the POI may be stronger than this, never weaker.
+    pub fn pinned_function(self) -> Option<StructureFunction> {
+        match self {
+            PoiKind::Terminal => Some(StructureFunction::Anchor),
+            PoiKind::Angle => Some(StructureFunction::Angle),
+            PoiKind::Crossing | PoiKind::Obstacle | PoiKind::Constraint => None,
+        }
+    }
+
+    /// Short label for tables and tooltips.
+    pub fn label(self) -> &'static str {
+        match self {
+            PoiKind::Terminal => "terminal",
+            PoiKind::Angle => "angle",
+            PoiKind::Crossing => "crossing",
+            PoiKind::Obstacle => "obstacle",
+            PoiKind::Constraint => "constraint",
+        }
+    }
+}
+
+/// One georeferenced point of interest along the route (G9, ADR-0019).
+///
+/// A POI carries both its geographic position (`lat`/`lon`, the portable
+/// georeference the terrain is sampled at) and its **station**
+/// (`distance_m`, cumulative ground distance along the route polyline) so the
+/// derived profile and every tower share one horizontal axis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Poi {
+    /// What the POI is, and what structure (if any) it obliges.
+    pub kind: PoiKind,
+    /// Latitude of the POI, degrees.
+    pub lat: f64,
+    /// Longitude of the POI, degrees.
+    pub lon: f64,
+    /// Cumulative ground distance from the route start, metres (the station).
+    pub distance_m: f64,
+    /// Terrain elevation sampled at the POI, metres (MSL).
+    #[serde(default)]
+    pub ground_elevation_m: f64,
+    /// Deviation (line) angle at an [`Angle`](PoiKind::Angle) POI, degrees; 0 for
+    /// other kinds. Drives the pinned structure's `line_angle_deg`.
+    #[serde(default)]
+    pub deviation_angle_deg: f64,
+    /// Optional human label, e.g. `"BR-101 crossing"`.
+    #[serde(default)]
+    pub name: String,
+}
+
+impl Poi {
+    /// A terminal POI at a geographic position and station.
+    pub fn terminal(lat: f64, lon: f64, distance_m: f64) -> Self {
+        Poi {
+            kind: PoiKind::Terminal,
+            lat,
+            lon,
+            distance_m,
+            ground_elevation_m: 0.0,
+            deviation_angle_deg: 0.0,
+            name: String::new(),
+        }
+    }
+}
+
+/// The explicit route the transmission line follows (G9, ADR-0019).
+///
+/// An ordered list of [`Poi`] vertices, ascending by [`distance_m`](Poi::distance_m).
+/// The route is the **primary** plan artefact: the 2-D ground profile is *derived*
+/// from it (sample the terrain along the polyline), and its `Angle`/`Terminal` POIs
+/// **pin obligatory structures** that the spotting stage may not delete.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Route {
+    /// Route vertices in order of increasing station.
+    pub pois: Vec<Poi>,
+}
+
+impl Route {
+    /// A trivial two-POI route — terminal to terminal — spanning `[0, length_m]`
+    /// between the given geographic endpoints. This is the route the v2→v3
+    /// migration synthesises from a legacy profile's endpoints.
+    pub fn straight(lat0: f64, lon0: f64, lat1: f64, lon1: f64, length_m: f64) -> Self {
+        Route {
+            pois: vec![
+                Poi::terminal(lat0, lon0, 0.0),
+                Poi::terminal(lat1, lon1, length_m),
+            ],
+        }
+    }
+
+    /// Total route length, metres (the last POI's station).
+    pub fn length_m(&self) -> f64 {
+        self.pois.last().map(|p| p.distance_m).unwrap_or(0.0)
+    }
+
+    /// The POIs that **oblige a structure** (terminals and angle points), in route
+    /// order, each paired with the minimum [`StructureFunction`] it demands.
+    pub fn pinned_structures(&self) -> impl Iterator<Item = (&Poi, StructureFunction)> {
+        self.pois
+            .iter()
+            .filter_map(|p| p.kind.pinned_function().map(|f| (p, f)))
+    }
+}
+
 // ── structure typing & family library (G7/G8) ───────────────────────────────────
 
 /// The mechanical function of a spotted structure (G7).
@@ -472,8 +629,97 @@ impl ApplicationChart {
     }
 }
 
+// ── structure attachment geometry (G10) ──────────────────────────────────────────
+
+/// One conductor attachment point on a structure, in the structure's own 2-D
+/// **elevation frame** (G10, ADR-0020).
+///
+/// The frame is centred on the structure: `lateral_offset_m` runs across the line
+/// (signed, + to one side of the centreline), `vertical_offset_m` is measured from
+/// the structure's **reference attachment** (the `attachment_height_m` point of the
+/// [`Tower`]; phases hanging below it are negative, a shield peak above it is
+/// positive). These are exactly the offsets a [`Wire`] carries, which is what makes
+/// the family the single source of truth for where a wire attaches (ADR-0020).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentPoint {
+    /// The role of the wire that attaches here.
+    pub role: WireRole,
+    /// Vertical offset from the structure reference attachment, metres (signed).
+    pub vertical_offset_m: f64,
+    /// Lateral offset from the centreline, metres (signed).
+    pub lateral_offset_m: f64,
+    /// Label of the position, e.g. `"Phase A"` or `"Shield"`.
+    #[serde(default)]
+    pub label: String,
+}
+
+/// The drawable geometry of a structure family (G10, ADR-0020): the per-conductor
+/// attachment points plus the body/crossarm silhouette, both in the structure's
+/// elevation frame. The tower-elevation view renders this, and the per-[`Wire`]
+/// offsets are reconciled to come from it ([`Project::reconcile_wire_offsets`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AttachmentGeometry {
+    /// Attachment point per conductor position, top of structure first.
+    pub attachments: Vec<AttachmentPoint>,
+    /// Body/crossarm silhouette polyline, `[lateral_m, vertical_m]` vertices in
+    /// the elevation frame, relative to the reference attachment. Drawn as a
+    /// single connected path; the view extends the mast down to ground using the
+    /// chosen height.
+    #[serde(default)]
+    pub silhouette: Vec<[f64; 2]>,
+}
+
+impl AttachmentGeometry {
+    /// A representative single-circuit geometry — three phases in a vertical/offset
+    /// arrangement plus one shield wire at the peak — matching the default wire set
+    /// of [`Project::with_three_phase`]. Illustrative, not a standard table
+    /// (ADR-0004); a project can edit it.
+    pub fn single_circuit() -> Self {
+        // Order matches the wire set of `Project::with_three_phase` (phases first,
+        // then the shield) so reconciling pairs wire-to-attachment by index.
+        AttachmentGeometry {
+            attachments: vec![
+                AttachmentPoint {
+                    role: WireRole::Phase,
+                    vertical_offset_m: 0.0,
+                    lateral_offset_m: -4.0,
+                    label: "Phase A".to_string(),
+                },
+                AttachmentPoint {
+                    role: WireRole::Phase,
+                    vertical_offset_m: -2.5,
+                    lateral_offset_m: 0.0,
+                    label: "Phase B".to_string(),
+                },
+                AttachmentPoint {
+                    role: WireRole::Phase,
+                    vertical_offset_m: -5.0,
+                    lateral_offset_m: 4.0,
+                    label: "Phase C".to_string(),
+                },
+                AttachmentPoint {
+                    role: WireRole::Shield,
+                    vertical_offset_m: 4.0,
+                    lateral_offset_m: 0.0,
+                    label: "Shield".to_string(),
+                },
+            ],
+            // Mast + crossarms, traced as one connected polyline.
+            silhouette: vec![
+                [0.0, 4.0],  // shield peak
+                [0.0, 0.0],  // down the mast to phase-A level
+                [-4.0, 0.0], // phase-A crossarm
+                [0.0, 0.0],  // back to the mast
+                [0.0, -5.0], // down the mast past phase B (on-mast) to phase C
+                [4.0, -5.0], // phase-C crossarm
+                [0.0, -5.0], // back to the mast
+            ],
+        }
+    }
+}
+
 /// A standardised structure design available across a height range, rated by an
-/// [`ApplicationChart`] (G8).
+/// [`ApplicationChart`] (G8) and drawn from an [`AttachmentGeometry`] (G10).
 ///
 /// Spotting a tower means choosing a family + height whose chart envelopes the
 /// wind/weight spans and line angle at that location; the optimizer (Phase 5)
@@ -492,6 +738,10 @@ pub struct StructureFamily {
     pub default_height_m: f64,
     /// Allowable-loads envelope.
     pub chart: ApplicationChart,
+    /// Drawable attachment/silhouette geometry (G10); the source of truth for
+    /// where each wire attaches.
+    #[serde(default)]
+    pub geometry: AttachmentGeometry,
 }
 
 impl StructureFamily {
@@ -507,6 +757,7 @@ impl StructureFamily {
                 max_height_m: 36.0,
                 default_height_m: 24.0,
                 chart: ApplicationChart::rectangular(450.0, -150.0, 600.0, 2.0),
+                geometry: AttachmentGeometry::single_circuit(),
             },
             StructureFamily {
                 name: "Light angle".to_string(),
@@ -515,6 +766,7 @@ impl StructureFamily {
                 max_height_m: 33.0,
                 default_height_m: 24.0,
                 chart: ApplicationChart::rectangular(400.0, -100.0, 550.0, 20.0),
+                geometry: AttachmentGeometry::single_circuit(),
             },
             StructureFamily {
                 name: "Heavy angle / dead-end".to_string(),
@@ -523,6 +775,7 @@ impl StructureFamily {
                 max_height_m: 30.0,
                 default_height_m: 21.0,
                 chart: ApplicationChart::rectangular(350.0, -50.0, 500.0, 90.0),
+                geometry: AttachmentGeometry::single_circuit(),
             },
         ]
     }
@@ -572,6 +825,12 @@ pub struct Tower {
     /// Structure-family reference + overrides (G8); `None` ⇒ unassigned.
     #[serde(default)]
     pub family: Option<TowerFamily>,
+    /// Index into [`Route::pois`] of the POI that pinned this structure (G9), if
+    /// any. A pinned tower may not be deleted and may not be typed below the
+    /// function its POI obliges ([`PoiKind::pinned_function`]); a freely-spotted
+    /// tangent tower carries `None`.
+    #[serde(default)]
+    pub origin_poi: Option<usize>,
 }
 
 impl Tower {
@@ -579,6 +838,13 @@ impl Tower {
     #[inline]
     pub fn attachment_elevation_m(&self) -> f64 {
         self.ground_elevation_m + self.attachment_height_m
+    }
+
+    /// Whether this structure was pinned by a route POI (G9) and so cannot be
+    /// freely deleted or down-typed.
+    #[inline]
+    pub fn is_pinned(&self) -> bool {
+        self.origin_poi.is_some()
     }
 }
 
@@ -599,4 +865,90 @@ pub fn tension_sections(towers: &[Tower]) -> Vec<(usize, usize)> {
     }
     anchors.push(towers.len() - 1);
     anchors.windows(2).map(|w| (w[0], w[1])).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poi_kind_pins_the_right_function() {
+        assert_eq!(
+            PoiKind::Terminal.pinned_function(),
+            Some(StructureFunction::Anchor)
+        );
+        assert_eq!(
+            PoiKind::Angle.pinned_function(),
+            Some(StructureFunction::Angle)
+        );
+        assert_eq!(PoiKind::Crossing.pinned_function(), None);
+        assert_eq!(PoiKind::Obstacle.pinned_function(), None);
+        assert_eq!(PoiKind::Constraint.pinned_function(), None);
+    }
+
+    #[test]
+    fn route_pins_terminals_and_angles_only() {
+        let route = Route {
+            pois: vec![
+                Poi::terminal(0.0, 0.0, 0.0),
+                Poi {
+                    kind: PoiKind::Crossing,
+                    lat: 0.0,
+                    lon: 0.0,
+                    distance_m: 300.0,
+                    ground_elevation_m: 0.0,
+                    deviation_angle_deg: 0.0,
+                    name: String::new(),
+                },
+                Poi {
+                    kind: PoiKind::Angle,
+                    lat: 0.0,
+                    lon: 0.0,
+                    distance_m: 600.0,
+                    ground_elevation_m: 0.0,
+                    deviation_angle_deg: 25.0,
+                    name: String::new(),
+                },
+                Poi::terminal(0.0, 0.0, 1000.0),
+            ],
+        };
+        assert!((route.length_m() - 1000.0).abs() < 1e-9);
+        let pinned: Vec<_> = route.pinned_structures().collect();
+        // Two terminals + one angle ⇒ three pinned structures; the crossing pins none.
+        assert_eq!(pinned.len(), 3);
+        assert_eq!(pinned[0].1, StructureFunction::Anchor);
+        assert_eq!(pinned[1].1, StructureFunction::Angle);
+        assert_eq!(pinned[2].1, StructureFunction::Anchor);
+    }
+
+    #[test]
+    fn reconcile_pulls_wire_offsets_from_family_geometry() {
+        let mut p = Project::with_three_phase("geom");
+        p.families = StructureFamily::built_in_library();
+        // Scramble the offsets, then reconcile them back from the family geometry.
+        for w in &mut p.wires {
+            w.vertical_offset_m = 99.0;
+            w.lateral_offset_m = 99.0;
+        }
+        p.reconcile_wire_offsets(0);
+        let geom = AttachmentGeometry::single_circuit();
+        for (w, a) in p.wires.iter().zip(geom.attachments.iter()) {
+            assert!((w.vertical_offset_m - a.vertical_offset_m).abs() < 1e-9);
+            assert!((w.lateral_offset_m - a.lateral_offset_m).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn builtin_geometry_matches_default_wire_set() {
+        // The single-circuit geometry must line up with the wire set
+        // `with_three_phase` ships, so reconciling is a no-op on a fresh project.
+        let p = Project::with_three_phase("default");
+        let geom = AttachmentGeometry::single_circuit();
+        assert_eq!(p.wires.len(), geom.attachments.len());
+        for (w, a) in p.wires.iter().zip(geom.attachments.iter()) {
+            assert_eq!(w.role, a.role);
+            assert!((w.vertical_offset_m - a.vertical_offset_m).abs() < 1e-9);
+            assert!((w.lateral_offset_m - a.lateral_offset_m).abs() < 1e-9);
+        }
+    }
 }

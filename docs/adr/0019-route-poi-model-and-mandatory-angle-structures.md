@@ -1,7 +1,9 @@
 # ADR-0019 — Explicit route / POI model and mandatory structures at angle points
 
-- Status: Proposed
+- Status: Accepted (delivered G9, 2026-06-21)
 - Date: 2026-06-21
+- Superseded in part by: [ADR-0023](0023-angle-as-deflection-derived-property.md)
+  (angle is a deflection-derived property, not a structure function)
 - Builds on: [ADR-0009](0009-staged-design-pipeline-and-project-model.md) (pipeline),
   [ADR-0010](0010-manual-spotting-before-cost-optimization.md) (spotting),
   [ADR-0015](0015-multi-wire-conductor-set-and-tension-sections.md) (structure typing)

@@ -22,7 +22,7 @@
 
 ## Commercial/ close source software
 
-* <https://www.powerlinesystems.com/plscadd>
+* POWER LINE SYSTEMS. *PLS-CADD — Power Line Systems / CADD* (user manual, v. 19). Madison, WI: Power Line Systems (Bentley Systems), 2021. The reference commercial overhead-line design tool. Its **Level 1–4 wire modeling** (Level 1 = ruling span; Levels 2–4 = real-span finite element via the **SAPS** engine, adding inter-phase coupling through structure flexibility matrices and, at Level 4, a full system solve — Peyrot & Goulois flexibility-matrix method) is the industry articulation of ATLDP's ruling-span-core + uneven-span-FEM staging; its initial / final-after-creep / final-after-load ("common point") cable model matches the experimental stress-strain/creep treatment above. <https://www.powerlinesystems.com/plscadd>
 * <https://moosevalley.github.io/overhead_cable_sag_calculator.html>
 * Southwire Sag10 — conductor sag-tension: <https://www.sag10.com/>
 

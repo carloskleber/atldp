@@ -455,6 +455,7 @@ mod tests {
             default_height_m: 20.0,
             // Allow only up to a 100 m wind span — the 400 m spans bust it.
             chart: ApplicationChart::rectangular(100.0, -200.0, 200.0, 5.0),
+            geometry: Default::default(),
         }];
         p.towers[1].family = Some(TowerFamily {
             family: 0,

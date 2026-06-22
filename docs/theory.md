@@ -71,11 +71,15 @@ plane between two equal-height supports. The real problem is 3D:
 - **Uneven spans.** The two attachment points are generally at different
   elevations (sloping terrain, different structure heights). The cable then hangs
   as an *inclined* catenary, and the maximum tension is at the higher support.
-- **Angle towers.** The line changes plan direction at angle structures. This does
-  not change the within-span mechanics — the cable between two points still hangs
-  in the vertical plane through those two points — but it produces a transverse
-  load on the structure (the bisector load) handled at the structure-modeling
-  stage.
+- **Deflections (angle structures).** The line changes plan direction at a
+  *deflection*. This does not change the within-span mechanics — the cable between
+  two points still hangs in the vertical plane through those two points — but the
+  two adjacent spans pull along different bearings, so their horizontal tensions sum
+  to a transverse *bisector* load on the structure, handled at the structure-modeling
+  stage. A deflection is not itself a structural function: it is carried either by a
+  **suspension** (a running / light angle, where the tension section continues
+  through) or by an **anchor** (a strain / heavy angle that terminates the section),
+  the choice bounded by the family's permissible line angle (ADR-0023).
 - **Wind blow-out / swing.** Transverse wind tilts the load plane out of vertical,
   turning the in-plane catenary into a swung 3D curve. This is a load-case concern
   (Phase 2): the static shape in the swung plane is still a catenary under the
@@ -153,7 +157,12 @@ with $L_i = L(H_i)$ from the closed form above. Eliminating $L_0$ between a
 reference and a target state thus gives one equation for the new horizontal
 tension $H_2$. Because the geometric length $L(H)$ decreases with $H$ (tighter
 conductor) while the elastic stretch increases with $H$, the root $H_2$ is unique
-and found by a robust bracketed solve. This is implemented in
+and found by a robust bracketed solve. This single equation is the engine behind
+every temperature and load case: a temperature rise lengthens the conductor through
+$\alpha\,\Delta\theta$, which the change of state absorbs as a drop in $H$ and a
+matching increase in sag (and the reverse at low temperature, the high-tension
+case); it is run once per section on the ruling span $S_r$ and the resulting
+$H(\theta)$ projected back to each real span. This is implemented in
 `atldp.core.change_of_state`. The Phase 1 constitutive law is the single-modulus
 linear-elastic + thermal model; the full bilinear initial/final aluminium–steel
 behaviour and time/temperature **creep** [3, 4] refine $\varepsilon(H,\theta)$
@@ -165,14 +174,11 @@ $$
 S_r = \sqrt{\frac{\sum_i S_i^3}{\sum_i S_i}},
 $$
 
-solved once (by `atldp.core.ruling_span`) and applied back to every real span.
-This reduction is exact only under its usual assumptions (free-swinging
-suspension insulators that equalise $H$, geometrically similar spans); its
-accuracy degrades at high operating temperature and for strongly unequal spans
-[2]. Because real structures attach the wires at different points, unequal spans
-are common, so this is the entry point for the **uneven-span FEM section solver**,
-brought forward to phase G11 (ADR-0021) and validated against this analytic
-reduction in the equal-span limit (ADR-0003/0008).
+solved once (by `atldp.core.ruling_span`); the common $H(\theta)$ is then projected
+back onto every real span, where the sag scales as $\text{sag}_i \propto (S_i/S_r)^2$
+[3]. The reduction holds only under its stated assumptions — free-swinging
+suspension insulators that equalise $H$, and geometrically similar spans — whose
+physical basis, accuracy, and limits are taken up in *Suspension strings* below.
 
 The *boundaries* of a tension section are the **anchor (strain / dead-end)
 structures**: at a suspension structure the insulator swings freely and the
@@ -185,6 +191,64 @@ tighter) likewise has its own tension and load, so the section solve above is ru
 per (wire, section) pair rather than once for the whole line. This is the model
 realised in the product by ADR-0015 (`atldp_core::ruling_span::Section` is the
 per-section kernel).
+
+### Suspension strings and the validity of the ruling span
+
+The ruling span rests on one physical assumption: that the suspension insulator
+strings between a section's anchors equalise the horizontal tension across all its
+spans. They do so because the conductor attachment point at the bottom of a free
+I-string is free to move — a span-to-span tension imbalance tilts the string
+longitudinally until its restoring moment (string weight plus the supported
+vertical conductor load, about the crossarm attachment) balances the unbalanced
+pull. The equalisation is efficient: for a typical string a longitudinal tilt of a
+few degrees — a few centimetres of travel — absorbs most of a kilonewton-scale
+imbalance, and the residual difference left after the string settles is only the
+small part the restoring moment cannot overcome [3]. A V-string, or a post
+insulator, constrains this longitudinal motion and so couples adjacent spans less
+completely.
+
+Because equalisation is good but not perfect, the ruling span is an approximation
+whose error is bounded by how far the section departs from its assumptions:
+
+- **Span-length spread and temperature compound.** For reasonably level spans of
+  comparable length the ruling-span sags track an exact coupled solve to within a
+  small fraction of a metre. The error grows with the *spread* of span lengths and
+  with operating temperature, and the two compound: it matters mainly where a
+  section mixes widely differing spans **and** the conductor runs hot — roughly
+  above 100 °C [2, 3]. In that regime the non-ideal-ruling-span error can exceed the
+  other high-temperature sag errors (knee-point, modulus-versus-temperature, and
+  creep effects) *combined* [3]. The bias is directional: the shortest spans sag
+  **more** than the ruling span predicts and the longest spans **less** — so it is
+  the short spans, where the clearance margin is already smallest, that most warrant
+  an exact check.
+- **Equalisation can fail outright.** When spans are steeply inclined or the tension
+  is very low, the string cannot supply the longitudinal travel needed to equalise
+  $H$, and the spans behave as partly independent. A steep inclination can also drive
+  the vertical reaction at the *lower* support **negative** — the conductor pulls
+  upward on the structure, the catenary low point having moved outside the span (the
+  inclined-span $a \notin [0,S]$ case above). A suspension string cannot resist this
+  **uplift**; it is a distinct design check (insulator lift-off), not a sag
+  refinement.
+
+Both failure modes are precisely the regime in which the analytic reduction gives way
+to the **uneven-span FEM section solver** (ADR-0021, brought forward to phase G11),
+which models each insulator string's equilibrium explicitly. Because real structures
+attach the wires at their own points, genuinely unequal spans are the common case, so
+the FEM solver is validated against this analytic reduction only in the equal-span,
+moderate-temperature limit where the two must agree (ADR-0003/0008).
+
+This two-tier choice — ruling span where its assumptions hold, finite element where
+they do not — is the same one the reference commercial tool **PLS-CADD** formalises as
+its *modeling levels* [20]. Level 1 is the ruling span itself: one horizontal tension
+across a section of perfectly (longitudinally) flexible supports, used for the
+overwhelming majority of design and all preliminary work. Levels 2–4 are *real-span*
+finite-element models that drop the equal-tension assumption to resolve what the
+ruling span cannot — non-uniform ice, broken-conductor and slack-redistribution cases,
+support displacement, and high-temperature sags — Level 2 one wire at a time, Level 3
+adding inter-phase coupling through structure flexibility matrices, Level 4 a full
+system solve. ATLDP's analytic core is the Level-1 equivalent and its uneven-span FEM
+kernel targets the Level-2 capability; the inter-wire and full-system levels align with
+the deferred structural/dynamic FEM track (ADR-0003).
 
 ## Wind and load cases
 
@@ -330,7 +394,12 @@ n$ empirical coefficients tabulated per alloy/construction. Equivalently, the
 *final* polynomial above is the locus the conductor reaches after this creep has
 accumulated (conventionally ≈ 10 years at everyday tension), so design takes the
 worse of the two permanent-elongation mechanisms — high-load **settlement** and
-long-time **creep** — when predicting final sag [3, 17, 19].
+long-time **creep** — when predicting final sag [3, 17, 19]. Commercial practice
+encodes exactly this as three conductor states — *initial*, *final after creep*, and
+*final after load* — fixed by two designated weather cases: an everyday case at which
+the ten-year creep is evaluated, and a severe **common-point** load case that sets the
+high-load permanent stretch; whichever gives the larger permanent elongation ("creep
+controls" vs "load controls") governs the final sag [20].
 
 In ATLDP this section is exactly the refinement anticipated in *Change of state*:
 it replaces the constant $\varepsilon_{\text{creep}}$ offset and the single modulus
@@ -452,6 +521,12 @@ predictor equations and evaluation methods.* Electra, n. 75, p. 63–98, 1981.
 [19]&nbsp; BRADBURY, J.; DEY, P.; ORAWSKI, G.; PICKUP, K. H. *Long-term-creep
 assessment for overhead-line conductors.* Proceedings of the IEE, v. 122, n. 10,
 p. 1146–1152, 1975.
+
+[20]&nbsp; POWER LINE SYSTEMS. *PLS-CADD — Power Line Systems / CADD* (user manual,
+v. 19). Madison, WI: Power Line Systems (Bentley Systems), 2021. The reference
+commercial overhead-line design software: Level 1 (ruling span) through Level 4
+(full finite-element) wire modeling, and the initial / final-after-creep /
+final-after-load stress–strain cable model.
 
 A fuller bibliography (including software and reference repositories) is kept in
 [`references.md`](../references.md).

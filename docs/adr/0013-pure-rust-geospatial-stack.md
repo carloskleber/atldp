@@ -31,6 +31,13 @@ enabled at the cost of footprint, off by default.
 ADR-0005's **principle is unchanged** — local DEM as source of truth, online
 elevation APIs only in throwaway prototypes; only the *tooling* moves to Rust.
 
+**Amendment (2026-06-21, ADR-0022):** the no-network posture is relaxed in **one**
+place — an **online basemap for the stage-1 endpoint-picking map** (the user picks the
+project endpoints on a world map before any DEM exists). This is display-only tiling
+for endpoint selection; the geospatial *numerics* — DEM ingest, CRS transforms,
+profile sampling — stay fully offline and file-based, and online DEM tile download
+remains out of scope.
+
 ## Consequences
 
 - Static, self-contained builds that keep the < 30 MB target and cross-compile

@@ -1,10 +1,15 @@
-//! ATLDP desktop CAD application — G5 manual spotting (ADR-0011, ADR-0012).
+//! ATLDP desktop CAD application — manual spotting through G10 (ADR-0011, ADR-0012).
 //!
 //! Extends G3 terrain/route with:
 //!   - Click-to-place tower spotting on the 2D terrain profile
 //!   - Live catenary computation between consecutive towers
 //!   - Ground clearance check with colour-coded violation highlights
 //!   - Tower and conductor geometry in the 3D viewport (SpottingLines renderer)
+//!   - An editable tower table (function / family / height) that re-partitions
+//!     tension sections live (G9, ADR-0019); the saved project carries an explicit
+//!     terminal→terminal `Route` the ground profile is derived from
+//!   - A tower-elevation tab drawing the selected structure's silhouette and
+//!     per-wire attachment points (G10, ADR-0020)
 //!
 //! Terrain file: set `ATLDP_TERRAIN=/path/to/tile.hgt` or place
 //! `S23W043.hgt` in `crates/atldp-geo/tests/data/` (see fetch_srtm.sh).
@@ -25,7 +30,8 @@ use atldp_geo::{
     profile::{extract_profile, ProfilePoint},
 };
 use atldp_model::{
-    analysis, format, report, sheet, ConductorSpec, ProfileSample, Project, TerrainRef, Tower,
+    analysis, format, report, sheet, ConductorSpec, ProfileSample, Project, Route, StructureFamily,
+    StructureFunction, TerrainRef, Tower, TowerFamily,
 };
 use atldp_render::{
     camera::{Camera2D, OrbitCamera},
@@ -59,6 +65,10 @@ struct TerrainData {
     profile_3d_start: [f32; 2],
     /// LocalGrid (east, north) of the profile end, metres.
     profile_3d_end: [f32; 2],
+    /// Geographic (lat, lon) of the profile start — the route's first terminal (G9).
+    profile_geo_start: (f64, f64),
+    /// Geographic (lat, lon) of the profile end — the route's last terminal (G9).
+    profile_geo_end: (f64, f64),
     /// Provenance of the DEM tile, carried into saved projects.
     source: TerrainRef,
 }
@@ -109,6 +119,8 @@ impl TerrainData {
             profile_total_dist,
             profile_3d_start: [e0 as f32, n0 as f32],
             profile_3d_end: [e1 as f32, n1 as f32],
+            profile_geo_start: (lat0, lon0),
+            profile_geo_end: (lat1, lon1),
             source: TerrainRef {
                 source_path: path.display().to_string(),
                 sw_lat,
@@ -160,6 +172,8 @@ impl TerrainData {
 enum Tab {
     View3D,
     View2D,
+    /// Structure-scale elevation of the selected tower (G10, ADR-0020).
+    TowerElevation,
 }
 
 // ── application ───────────────────────────────────────────────────────────────
@@ -175,7 +189,7 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = WindowAttributes::default()
-            .with_title("ATLDP — manual spotting (G5)")
+            .with_title("ATLDP — route, spotting & structures (G10)")
             .with_inner_size(winit::dpi::LogicalSize::new(1400u32, 860u32));
         let window = Arc::new(event_loop.create_window(attrs).expect("window"));
         self.state = Some(AppState::new(window));
@@ -220,6 +234,10 @@ struct AppState {
     spotting_mode: bool,
     attachment_height_m: f64,
     min_clearance_m: f64,
+
+    // G8/G10 structure-family library + the tower selected for the elevation view.
+    families: Vec<StructureFamily>,
+    selected_tower: Option<usize>,
 
     // G6 structure/drafting/file-format state
     wind_pressure_pa: f64,
@@ -309,7 +327,7 @@ impl AppState {
         let [_, right] = dock_state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.5,
-            vec![Tab::View2D],
+            vec![Tab::View2D, Tab::TowerElevation],
         );
         let _ = right;
 
@@ -350,6 +368,8 @@ impl AppState {
             spotting_mode: false,
             attachment_height_m: 15.0,
             min_clearance_m: 8.0,
+            families: StructureFamily::built_in_library(),
+            selected_tower: None,
             wind_pressure_pa: 700.0,
             status: String::new(),
         }
@@ -404,17 +424,15 @@ impl AppState {
         let mut p = Project::new("ATLDP line");
         // The GUI edits a single representative phase wire (G5/G6 behaviour); the
         // multi-wire set (G7) is authored in the file or via the model API.
-        p.wires = vec![atldp_model::Wire::phase(
-            "Phase",
-            ConductorSpec::drake(),
-            0.0,
-            0.0,
-        )
-        .strung(self.h_tension_n)];
+        p.wires = vec![
+            atldp_model::Wire::phase("Phase", ConductorSpec::drake(), 0.0, 0.0)
+                .strung(self.h_tension_n),
+        ];
         p.parameters.horizontal_tension_n = self.h_tension_n;
         p.parameters.attachment_height_m = self.attachment_height_m;
         p.parameters.min_clearance_m = self.min_clearance_m;
         p.parameters.wind_pressure_pa = self.wind_pressure_pa;
+        p.families = self.families.clone();
         if let Some(t) = &self.terrain {
             p.terrain = Some(t.source.clone());
             p.ground_profile = t
@@ -426,6 +444,18 @@ impl AppState {
                     elevation_m: pp.elevation_m as f64,
                 })
                 .collect();
+            // G9 (ADR-0019): the profile is *derived* from an explicit route. The
+            // app currently extracts a single straight corridor, so the route is a
+            // trivial terminal→terminal line through its geographic endpoints; the
+            // stored profile is the sampling of the terrain along it. A plan-view
+            // POI editor (angle points etc.) is later GUI work.
+            let (lat0, lon0) = t.profile_geo_start;
+            let (lat1, lon1) = t.profile_geo_end;
+            let mut route = Route::straight(lat0, lon0, lat1, lon1, t.profile_total_dist);
+            for poi in &mut route.pois {
+                poi.ground_elevation_m = t.elev_at(poi.distance_m) as f64;
+            }
+            p.route = Some(route);
         }
         p.towers = self.towers.clone();
         p
@@ -443,7 +473,11 @@ impl AppState {
         self.attachment_height_m = p.parameters.attachment_height_m;
         self.min_clearance_m = p.parameters.min_clearance_m;
         self.wind_pressure_pa = p.parameters.wind_pressure_pa;
+        if !p.families.is_empty() {
+            self.families = p.families;
+        }
         self.towers = p.towers;
+        self.selected_tower = None;
     }
 
     fn save_project(&mut self) {
@@ -747,40 +781,149 @@ impl AppState {
                 });
         }
 
-        // ── right panel: tower / span data ──
-        let towers_snap = self.towers.clone();
-        let h_tension = self.h_tension_n;
-        let min_clear = self.min_clearance_m;
-        let terrain_ref = self.terrain.as_ref();
-        // G6: derived structure loads for the side panel (single source of truth
-        // with the report and sheet via atldp_model::analysis).
-        let structure_results = analysis::analyze(&self.build_project()).structures;
+        // ── right panel: editable tower table + span / load data (G9) ──
+        // All read-only results are computed *before* the mutable tower borrow so
+        // the table can edit `self.towers` in place; edits show up next frame.
+        let analysis = analysis::analyze(&self.build_project());
+        let structure_results = analysis.structures;
+        let section_count = analysis.sections.len();
+        // Pre-render the span table rows (these need the terrain, which we must not
+        // borrow across the mutable tower edit below).
+        let span_rows: Vec<(String, f64, f64, String)> = {
+            let h_tension = self.h_tension_n;
+            let min_clear = self.min_clearance_m;
+            let terrain_ref = self.terrain.as_ref();
+            self.towers
+                .windows(2)
+                .enumerate()
+                .map(|(i, w)| {
+                    let horiz = w[1].distance_m - w[0].distance_m;
+                    let (sag, clr) = span_stats(terrain_ref, &w[0], &w[1], h_tension, min_clear);
+                    let clr_str = clr
+                        .map(|c| format!("{c:.1}"))
+                        .unwrap_or_else(|| "-".to_string());
+                    (format!("S{}-{}", i + 1, i + 2), horiz, sag, clr_str)
+                })
+                .collect()
+        };
+
+        // Disjoint field borrows for the editable table.
+        let towers = &mut self.towers;
+        let families = &self.families;
+        let selected = &mut self.selected_tower;
 
         egui::Panel::right("spotting_panel")
-            .default_size(260.0)
+            .default_size(300.0)
             .show_inside(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.strong("Towers");
+                    ui.horizontal(|ui| {
+                        ui.strong("Towers");
+                        ui.label(
+                            egui::RichText::new(format!("· {section_count} tension section(s)"))
+                                .weak(),
+                        );
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "Edit a row's function to re-partition tension sections; \
+                             select ▶ to inspect the structure.",
+                        )
+                        .weak()
+                        .size(10.0),
+                    );
                     ui.separator();
                     egui::Grid::new("tower_grid")
                         .striped(true)
-                        .min_col_width(48.0)
+                        .min_col_width(40.0)
                         .show(ui, |ui| {
                             ui.label("#");
                             ui.label("Dist (km)");
-                            ui.label("Gnd (m)");
+                            ui.label("Function");
+                            ui.label("Family");
                             ui.label("Att (m)");
+                            ui.label("");
                             ui.end_row();
-                            for (i, tw) in towers_snap.iter().enumerate() {
-                                ui.label(format!("T{}", i + 1));
+                            let mut to_remove: Option<usize> = None;
+                            for (i, tw) in towers.iter_mut().enumerate() {
+                                let is_sel = *selected == Some(i);
+                                let label = egui::RichText::new(format!("T{}", i + 1));
+                                let label = if is_sel { label.strong() } else { label };
+                                ui.label(label);
                                 ui.label(format!("{:.2}", tw.distance_m / 1000.0));
-                                ui.label(format!("{:.0}", tw.ground_elevation_m));
-                                ui.label(format!("{:.0}", tw.attachment_elevation_m()));
+
+                                // Function dropdown — re-partitions sections live.
+                                egui::ComboBox::from_id_salt(("fn", i))
+                                    .selected_text(tw.function.label())
+                                    .width(96.0)
+                                    .show_ui(ui, |ui| {
+                                        for f in [
+                                            StructureFunction::Suspension,
+                                            StructureFunction::Angle,
+                                            StructureFunction::Anchor,
+                                        ] {
+                                            ui.selectable_value(&mut tw.function, f, f.label());
+                                        }
+                                    });
+
+                                // Family dropdown — assigns/clears the G8 family ref.
+                                let fam_text = tw
+                                    .family
+                                    .as_ref()
+                                    .and_then(|tf| families.get(tf.family))
+                                    .map(|f| f.name.as_str())
+                                    .unwrap_or("—");
+                                egui::ComboBox::from_id_salt(("fam", i))
+                                    .selected_text(fam_text)
+                                    .width(120.0)
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(tw.family.is_none(), "—").clicked()
+                                        {
+                                            tw.family = None;
+                                        }
+                                        for (fi, fam) in families.iter().enumerate() {
+                                            let sel = tw
+                                                .family
+                                                .as_ref()
+                                                .map(|tf| tf.family == fi)
+                                                .unwrap_or(false);
+                                            if ui.selectable_label(sel, &fam.name).clicked() {
+                                                tw.family = Some(TowerFamily {
+                                                    family: fi,
+                                                    height_m: fam.default_height_m,
+                                                    effective_height_override_m: None,
+                                                    chart_override: None,
+                                                });
+                                            }
+                                        }
+                                    });
+
+                                ui.add(
+                                    egui::DragValue::new(&mut tw.attachment_height_m)
+                                        .range(5.0..=80.0)
+                                        .speed(0.5),
+                                );
+
+                                ui.horizontal(|ui| {
+                                    if ui.small_button("▶").on_hover_text("Inspect").clicked() {
+                                        *selected = Some(i);
+                                    }
+                                    if ui.small_button("✖").on_hover_text("Delete").clicked() {
+                                        to_remove = Some(i);
+                                    }
+                                });
                                 ui.end_row();
+                            }
+                            if let Some(i) = to_remove {
+                                towers.remove(i);
+                                match *selected {
+                                    Some(s) if s == i => *selected = None,
+                                    Some(s) if s > i => *selected = Some(s - 1),
+                                    _ => {}
+                                }
                             }
                         });
 
-                    if towers_snap.len() >= 2 {
+                    if !span_rows.is_empty() {
                         ui.add_space(8.0);
                         ui.strong("Spans");
                         ui.separator();
@@ -793,19 +936,11 @@ impl AppState {
                                 ui.label("Sag (m)");
                                 ui.label("Min clr (m)");
                                 ui.end_row();
-                                for i in 0..towers_snap.len() - 1 {
-                                    let t1 = &towers_snap[i];
-                                    let t2 = &towers_snap[i + 1];
-                                    let horiz = t2.distance_m - t1.distance_m;
-                                    let (sag, clr) =
-                                        span_stats(terrain_ref, t1, t2, h_tension, min_clear);
-                                    let clr_str = clr
-                                        .map(|c| format!("{c:.1}"))
-                                        .unwrap_or_else(|| "-".to_string());
-                                    ui.label(format!("S{}-{}", i + 1, i + 2));
+                                for (name, horiz, sag, clr) in &span_rows {
+                                    ui.label(name);
                                     ui.label(format!("{horiz:.0}"));
                                     ui.label(format!("{sag:.1}"));
-                                    ui.label(clr_str);
+                                    ui.label(clr);
                                     ui.end_row();
                                 }
                             });
@@ -823,12 +958,23 @@ impl AppState {
                                 ui.label("Wind (m)");
                                 ui.label("Weight (m)");
                                 ui.label("Vert (kN)");
+                                ui.label("Chart");
                                 ui.end_row();
                                 for st in &structure_results {
                                     ui.label(format!("T{}", st.tower + 1));
                                     ui.label(format!("{:.0}", st.wind_span_m));
                                     ui.label(format!("{:.0}", st.weight_span_m));
                                     ui.label(format!("{:.1}", st.vertical_load_n / 1000.0));
+                                    match st.chart_ok {
+                                        Some(true) => ui.colored_label(
+                                            egui::Color32::from_rgb(80, 200, 120),
+                                            "✓",
+                                        ),
+                                        Some(false) => {
+                                            ui.colored_label(egui::Color32::RED, "✗ over")
+                                        }
+                                        None => ui.weak("—"),
+                                    };
                                     ui.end_row();
                                 }
                             });
@@ -848,6 +994,8 @@ impl AppState {
                         view_proj,
                         terrain: self.terrain.as_ref(),
                         towers: &mut self.towers,
+                        families: &self.families,
+                        selected_tower: &mut self.selected_tower,
                         spotting_mode: self.spotting_mode,
                         attachment_height_m: self.attachment_height_m,
                         h_tension_n: self.h_tension_n,
@@ -866,6 +1014,8 @@ struct Viewer<'a> {
     view_proj: [[f32; 4]; 4],
     terrain: Option<&'a TerrainData>,
     towers: &'a mut Vec<Tower>,
+    families: &'a [StructureFamily],
+    selected_tower: &'a mut Option<usize>,
     spotting_mode: bool,
     attachment_height_m: f64,
     h_tension_n: f64,
@@ -879,6 +1029,7 @@ impl TabViewer for Viewer<'_> {
         match tab {
             Tab::View3D => "3D view".into(),
             Tab::View2D => "Profile".into(),
+            Tab::TowerElevation => "Tower elevation".into(),
         }
     }
 
@@ -886,6 +1037,7 @@ impl TabViewer for Viewer<'_> {
         match tab {
             Tab::View3D => self.view3d(ui),
             Tab::View2D => self.view2d(ui),
+            Tab::TowerElevation => self.view_tower_elevation(ui),
         }
     }
 }
@@ -1300,6 +1452,144 @@ impl Viewer<'_> {
                 "grid X={grid_m_x:.0} m  Y={grid_m_y:.0} m  |  {:.3} px/m  |  right-drag pan  scroll zoom",
                 self.cam2d.pixels_per_metre
             ),
+            egui::FontId::monospace(10.0),
+            egui::Color32::from_gray(100),
+        );
+    }
+
+    // ── tower-elevation view (G10, ADR-0020) ────────────────────────────────────
+
+    /// Draw the selected tower's structure as a real shape: the family silhouette
+    /// and every wire attachment point in the structure's elevation frame, scaled
+    /// to fit. "Choosing a structure" becomes inspecting a drawing, not a number.
+    fn view_tower_elevation(&mut self, ui: &mut egui::Ui) {
+        let Some(sel) = *self.selected_tower else {
+            ui.centered_and_justified(|ui| {
+                ui.weak("Select a tower (▶ in the table) to inspect its structure.");
+            });
+            return;
+        };
+        let Some(tower) = self.towers.get(sel) else {
+            *self.selected_tower = None;
+            return;
+        };
+
+        // Resolve the family geometry; fall back to the built-in single-circuit
+        // shape so the view is meaningful even for an unassigned tower.
+        let height_m = tower.attachment_height_m;
+        let default_geom = atldp_model::AttachmentGeometry::single_circuit();
+        let (fam_name, geom) = match tower
+            .family
+            .as_ref()
+            .and_then(|tf| self.families.get(tf.family))
+        {
+            Some(fam) => (fam.name.as_str(), &fam.geometry),
+            None => ("(no family — default geometry)", &default_geom),
+        };
+
+        ui.horizontal(|ui| {
+            ui.strong(format!("T{}", sel + 1));
+            ui.label(fam_name);
+            ui.weak(format!(
+                "· {} · h={:.1} m",
+                tower.function.label(),
+                height_m
+            ));
+        });
+        ui.separator();
+
+        let (rect, _resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(16, 18, 22));
+
+        // Structure-frame extent: lateral and vertical span of attachments +
+        // silhouette, plus the mast down to ground (−height) and a margin.
+        let mut min_x = 0.0_f64;
+        let mut max_x = 0.0_f64;
+        let mut min_y = -height_m;
+        let mut max_y = 0.0_f64;
+        let mut acc = |x: f64, y: f64| {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        };
+        for a in &geom.attachments {
+            acc(a.lateral_offset_m, a.vertical_offset_m);
+        }
+        for p in &geom.silhouette {
+            acc(p[0], p[1]);
+        }
+        let span_x = (max_x - min_x).max(1.0);
+        let span_y = (max_y - min_y).max(1.0);
+        let margin = 40.0;
+        let sx = (rect.width() - 2.0 * margin) as f64 / span_x;
+        let sy = (rect.height() - 2.0 * margin) as f64 / span_y;
+        let scale = sx.min(sy);
+        let cx = rect.center().x as f64 - 0.5 * (min_x + max_x) * scale;
+        // y grows downward on screen.
+        let cy = rect.center().y as f64 + 0.5 * (min_y + max_y) * scale;
+        let to_screen = |x: f64, y: f64| -> egui::Pos2 {
+            egui::pos2((cx + x * scale) as f32, (cy - y * scale) as f32)
+        };
+
+        // Ground line at y = −height.
+        let gy = to_screen(min_x, -height_m).y;
+        painter.line_segment(
+            [egui::pos2(rect.left(), gy), egui::pos2(rect.right(), gy)],
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 120, 70)),
+        );
+        painter.text(
+            egui::pos2(rect.left() + 4.0, gy - 2.0),
+            egui::Align2::LEFT_BOTTOM,
+            "ground",
+            egui::FontId::monospace(10.0),
+            egui::Color32::from_gray(120),
+        );
+
+        // Mast from the lowest silhouette point down to ground.
+        let body_stroke = egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 220, 100));
+        painter.line_segment(
+            [to_screen(0.0, 0.0), to_screen(0.0, -height_m)],
+            body_stroke,
+        );
+        // Silhouette polyline.
+        let sil: Vec<egui::Pos2> = geom
+            .silhouette
+            .iter()
+            .map(|p| to_screen(p[0], p[1]))
+            .collect();
+        for w in sil.windows(2) {
+            painter.line_segment([w[0], w[1]], body_stroke);
+        }
+
+        // Attachment points, labelled by wire.
+        for a in &geom.attachments {
+            let p = to_screen(a.lateral_offset_m, a.vertical_offset_m);
+            let col = match a.role {
+                atldp_model::WireRole::Phase => egui::Color32::from_rgb(50, 200, 255),
+                atldp_model::WireRole::Shield => egui::Color32::from_rgb(200, 160, 255),
+            };
+            painter.circle_filled(p, 4.0, col);
+            painter.text(
+                p + egui::vec2(7.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!(
+                    "{}  ({:+.1}, {:+.1}) m  → {:.1} m",
+                    a.label,
+                    a.lateral_offset_m,
+                    a.vertical_offset_m,
+                    tower.attachment_elevation_m() + a.vertical_offset_m,
+                ),
+                egui::FontId::monospace(10.0),
+                col,
+            );
+        }
+
+        painter.text(
+            rect.left_bottom() + egui::vec2(6.0, -6.0),
+            egui::Align2::LEFT_BOTTOM,
+            "structure-frame elevation · attachment → conductor elevation (MSL)",
             egui::FontId::monospace(10.0),
             egui::Color32::from_gray(100),
         );

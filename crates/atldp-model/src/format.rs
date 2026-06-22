@@ -71,10 +71,14 @@ pub fn from_atldp_str(text: &str) -> Result<Project, FormatError> {
 }
 
 /// Migrate raw `.atldp` JSON from `from_version` up to [`SCHEMA_VERSION`], in
-/// place. Each step is the seam a future schema bump hooks into.
+/// place, one schema step at a time. Each step is the seam a future schema bump
+/// hooks into; the steps chain (a v1 file runs v1→v2 then v2→v3).
 fn migrate_value(value: &mut serde_json::Value, from_version: u32) {
     if from_version < 2 {
         migrate_v1_to_v2(value);
+    }
+    if from_version < 3 {
+        migrate_v2_to_v3(value);
     }
 }
 
@@ -104,6 +108,73 @@ fn migrate_v1_to_v2(value: &mut serde_json::Value) {
                     "lateral_offset_m": 0.0,
                     "tension_n": tension,
                 }]),
+            );
+        }
+    }
+    obj.insert(
+        "schema_version".to_string(),
+        serde_json::json!(SCHEMA_VERSION),
+    );
+}
+
+/// v2 → v3 (G9/G10): synthesise a trivial two-POI route (terminal → terminal)
+/// from the existing ground-profile endpoints so the now-derived profile has a
+/// route to belong to, and stamp the new `schema_version`. A v2 profile is just
+/// (distance, elevation) with no georeference, so the synthetic terminals borrow
+/// the terrain tile's south-west corner (or `0,0`) for lat/lon — the route is a
+/// straight terminal-to-terminal line that reproduces the v2 profile exactly.
+/// G10's `geometry` field defaults in via serde, so no structure-geometry work is
+/// needed here.
+fn migrate_v2_to_v3(value: &mut serde_json::Value) {
+    let serde_json::Value::Object(obj) = value else {
+        return;
+    };
+    let needs_route = obj.get("route").map(|r| r.is_null()).unwrap_or(true);
+    if needs_route {
+        let samples = obj
+            .get("ground_profile")
+            .and_then(|p| p.as_array())
+            .filter(|a| a.len() >= 2);
+        if let Some(samples) = samples {
+            let sample_at = |v: &serde_json::Value, key: &str| -> f64 {
+                v.get(key).and_then(|x| x.as_f64()).unwrap_or(0.0)
+            };
+            let first = &samples[0];
+            let last = &samples[samples.len() - 1];
+            let (lat, lon) = obj
+                .get("terrain")
+                .filter(|t| !t.is_null())
+                .map(|t| {
+                    (
+                        t.get("sw_lat").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        t.get("sw_lon").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    )
+                })
+                .unwrap_or((0.0, 0.0));
+            obj.insert(
+                "route".to_string(),
+                serde_json::json!({
+                    "pois": [
+                        {
+                            "kind": "terminal",
+                            "lat": lat,
+                            "lon": lon,
+                            "distance_m": sample_at(first, "distance_m"),
+                            "ground_elevation_m": sample_at(first, "elevation_m"),
+                            "deviation_angle_deg": 0.0,
+                            "name": "Terminal A",
+                        },
+                        {
+                            "kind": "terminal",
+                            "lat": lat,
+                            "lon": lon,
+                            "distance_m": sample_at(last, "distance_m"),
+                            "ground_elevation_m": sample_at(last, "elevation_m"),
+                            "deviation_angle_deg": 0.0,
+                            "name": "Terminal B",
+                        }
+                    ]
+                }),
             );
         }
     }
@@ -223,6 +294,54 @@ mod tests {
         // Untyped towers ⇒ all suspension ⇒ exactly one tension section.
         assert!(p.towers.iter().all(|t| !t.function.is_anchor()));
         assert_eq!(crate::tension_sections(&p.towers).len(), 1);
+    }
+
+    /// A v2 project (wires + typed towers, no `route`) loads as v3 with a trivial
+    /// terminal→terminal route synthesised from its profile endpoints, and its
+    /// stored profile is preserved unchanged (ADR-0019 migration).
+    #[test]
+    fn migrates_v2_to_v3_synthesises_route() {
+        let v2 = serde_json::json!({
+            "schema_version": 2,
+            "metadata": { "name": "Legacy v2", "notes": "" },
+            "wires": [{
+                "name": "Phase", "role": "phase",
+                "conductor": {
+                    "name": "ACSR Drake 26/7", "unit_weight_n_per_m": 15.97,
+                    "diameter_m": 0.0281, "rated_strength_n": 140_100.0
+                },
+                "vertical_offset_m": 0.0, "lateral_offset_m": 0.0, "tension_n": 30_000.0
+            }],
+            "parameters": {
+                "horizontal_tension_n": 30_000.0, "attachment_height_m": 15.0,
+                "min_clearance_m": 8.0, "wind_pressure_pa": 700.0
+            },
+            "terrain": { "source_path": "tile.hgt", "sw_lat": -23, "sw_lon": -43 },
+            "ground_profile": [
+                { "distance_m": 0.0, "elevation_m": 100.0 },
+                { "distance_m": 1000.0, "elevation_m": 120.0 }
+            ],
+            "towers": []
+        })
+        .to_string();
+
+        let p = from_atldp_str(&v2).unwrap();
+        assert_eq!(p.schema_version, SCHEMA_VERSION);
+        let route = p.route.expect("route synthesised");
+        assert_eq!(route.pois.len(), 2);
+        assert_eq!(route.pois[0].kind, crate::PoiKind::Terminal);
+        assert_eq!(route.pois[1].kind, crate::PoiKind::Terminal);
+        assert!((route.length_m() - 1000.0).abs() < 1e-9);
+        // Borrowed the terrain SW corner for the synthetic georeference.
+        assert!((route.pois[0].lat - (-23.0)).abs() < 1e-9);
+        assert!((route.pois[1].ground_elevation_m - 120.0).abs() < 1e-9);
+        // The stored profile is untouched.
+        assert_eq!(p.ground_profile.len(), 2);
+        // Each terminal pins an anchor.
+        assert_eq!(
+            route.pois[0].kind.pinned_function(),
+            Some(crate::StructureFunction::Anchor)
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@
 
 use atldp_geo::{
     dem::{wireframe_line_list, Dem},
-    profile::extract_profile,
+    profile::{extract_profile, extract_profile_polyline},
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -170,6 +170,28 @@ fn extract_profile_length_and_distance() {
             p.distance_m
         );
     }
+}
+
+#[test]
+fn polyline_profile_is_continuous_and_dedup() {
+    let bytes = synthetic_hgt_1201();
+    let dem = Dem::from_hgt(&bytes, 0, 0).expect("parse");
+    // A two-segment route: a corner, a bend, and an end.
+    let route = [(0.1, 0.1), (0.5, 0.5), (0.9, 0.1)];
+    let profile = extract_profile_polyline(&dem, &route, 20);
+    // 20 + 20 samples, less one shared bend vertex.
+    assert_eq!(profile.len(), 41);
+    // Monotonic, continuous cumulative distance starting at 0.
+    assert!((profile[0].distance_m - 0.0).abs() < 1e-6);
+    for w in profile.windows(2) {
+        assert!(w[1].distance_m >= w[0].distance_m);
+    }
+    // The bend sits at the end of the first segment (sample index 20).
+    let single_seg = extract_profile(&dem, 0.1, 0.1, 0.5, 0.5, 21);
+    assert!((profile[20].distance_m - single_seg[20].distance_m).abs() < 1.0);
+    // Degenerate inputs yield nothing.
+    assert!(extract_profile_polyline(&dem, &route, 0).is_empty());
+    assert!(extract_profile_polyline(&dem, &route[..1], 20).is_empty());
 }
 
 // ── integration tests (require downloaded tile) ───────────────────────────────

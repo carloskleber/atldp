@@ -1,6 +1,6 @@
 # ADR-0020 — Structure geometry and the tower-elevation view
 
-- Status: Proposed
+- Status: Accepted (delivered G10, 2026-06-21)
 - Date: 2026-06-21
 - Builds on: [ADR-0012](0012-desktop-gui-wgpu-egui.md) (GUI),
   [ADR-0015](0015-multi-wire-conductor-set-and-tension-sections.md) (wire set),

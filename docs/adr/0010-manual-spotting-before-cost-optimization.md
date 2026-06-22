@@ -5,7 +5,7 @@
 
 ## Context
 
-Tower placement ("spotting") is stage 3 of the pipeline (ADR-0009). The ideal is
+Tower placement ("spotting") is stage 6 of the pipeline (ADR-0009). The ideal is
 **automatic spotting**: place structures to **minimize overall material cost**
 subject to constraints — ground and phase clearances, conductor tension limits,
 allowable structure loading (wind/weight span), and structure-type availability.
@@ -18,7 +18,7 @@ optimize against an unreliable objective.
 ## Decision
 
 Implement **manual spotting first**: the engineer places structures along the
-profile, and the system evaluates each placement against the validated stage 4/5
+profile, and the system evaluates each placement against the validated stage 7/8
 checks (clearances, tension, structure loading), flagging violations.
 
 Spotting runs on the **profile derived from the route** (ADR-0019), not on a
