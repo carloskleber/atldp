@@ -24,7 +24,10 @@ editor** so the route is drawn on the terrain rather than hard-coded — and **r
 the workflow** so project-endpoint definition and standards selection precede the
 terrain (see ADR-0009). ADR-0023 (2026-06-21) corrects ADR-0019's structure typing:
 **angle is a deflection-derived property, not a structure function** (a structure is
-suspension or anchor). See phases G7–G14 in the
+suspension or anchor). ADR-0024 (2026-06-22) grows the G6 plan-&-profile *plot* into
+**production sheets** — paginated to **A1/A0** at a fixed drawing scale, with the full
+configurable structure / section / span / wire label sets, a title block, and a
+notes/legend block — the stage-9 drafting deliverable. See phases G7–G15 in the
 [implementation plan](../IMPLEMENTATION_PLAN.md).
 
 | ADR | Title | Status |
@@ -52,3 +55,4 @@ suspension or anchor). See phases G7–G14 in the
 | [0021](0021-bring-fem-forward-for-uneven-spans.md) | Bring FEM forward as the uneven-span section solver | Proposed |
 | [0022](0022-srtm-area-selection-and-plan-view-route-editor.md) | SRTM area selection and the plan-view route editor | Proposed |
 | [0023](0023-angle-as-deflection-derived-property.md) | Angle as a deflection-derived property, not a structure function | Proposed |
+| [0024](0024-production-plan-and-profile-sheets.md) | Production plan & profile sheets (paginated, A1/A0, full label sets) | Proposed |

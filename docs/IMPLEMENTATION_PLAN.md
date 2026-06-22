@@ -9,7 +9,8 @@ obligatory angle structures (**G9**, ADR-0019) and the tower-elevation view with
 attachment geometry (**G10**, ADR-0020). The next step is bringing the FEM section
 solver forward for uneven spans (**G11**, ADR-0021), ahead of the previously-planned
 standards load cases, ~1 m terrain, and stringing tables, which move to **G12–G14**
-(ADR-0017–0018).
+(ADR-0017–0018), and the **production plan-&-profile sheets** that turn the G6 plot into
+paginated A1/A0 drawings (**G15**, ADR-0024).
 
 > **Substrate (2026-06-15).** The product is a desktop CAD application — interactive
 > 2D/3D views (terrain, route, towers, conductors, LiDAR point clouds), high
@@ -53,7 +54,7 @@ Stages 1–3 are order-tolerant **setup**; stages 4–9 are the **computational 
 | 6 | **Tower placement (spotting)** | route + families → spotted, typed structures | **angle (deflection) POIs oblige a structure** (ADR-0019, G9); suspension vs anchor typing → **tension sections** (ADR-0015), angle a deflection-derived property gated by the chart (ADR-0023); structures from **families**, each a **drawn shape with real attachment points** (ADR-0016/0020, G10); **editable after spotting**; manual first, auto later |
 | 7 | **Sag-tension** | sections + **wire set** + load cases → sags, tensions, clearances | per-section solve — analytic **ruling span** where its assumptions hold, **FEM for uneven / multi-attachment spans** (ADR-0021, G11); **every wire** (3 phases/circuit + shield) at its own tension; swing/blowout; wire-ground & phase-phase clearances |
 | 8 | **Structure modeling** | spotted structures + spans + load cases → load checks | wind/weight/longitudinal span loads vs the family's rating; **IEC 60826** cases (ADR-0017) |
-| 9 | **Plan & profile drafting** | full project model → sheets & reports | drawings, calculation reports, and the field **stringing table** (G14) |
+| 9 | **Plan & profile drafting** | full project model → sheets & reports | **paginated A1/A0 plan-&-profile sheets** with structure/section/span/wire labels, title & notes blocks (ADR-0024, G15); calculation reports; field **stringing table** (G14) |
 
 ## Domain decomposition
 
@@ -76,7 +77,7 @@ The pipeline rests on these largely independent computational modules:
 | **Spotting** | structure placement & family selection; cost-minimizing optimization | 6 | ADR-0010/0016; NBR 5422 clearances |
 | **Clearances** | ground/RoW and phase-phase clearance checks | 6, 7 | NBR 5422 |
 | **Structure model** | wind/weight/longitudinal span loads, lattice & guyed-tower checks | 8 | IEC 60826; NBR 5422 |
-| **Drafting, reporting & stringing table** | plan & profile sheets, calculation reports, field stringing chart | 9 | IEEE 524; ADR-0009 |
+| **Drafting, reporting & stringing table** | **paginated A1/A0 plan & profile sheets** (configurable structure/section/span/wire labels, title/notes/legend blocks), calculation reports, field stringing chart | 9 | IEEE 524; ADR-0009/0024 |
 
 ## Delivered — native build track (Phases G0–G10, complete)
 
@@ -162,7 +163,7 @@ the unevenness the per-family geometry (G10) now makes explicit. G11 closes that
   per-section kernel choice (analytic vs FEM) is reported. Static uneven-span solve only;
   the dynamic FEM/ROM track stays later (ADR-0003).
 
-## Then — standards, precise terrain & field outputs (Phases G12–G14)
+## Then — standards, precise terrain & field outputs (Phases G12–G15)
 
 These reuse the validated core (`change_of_state`, the G11 section solve,
 `structure::structure_loads`) — representational and orchestration work over numerics
@@ -193,6 +194,39 @@ that are already cross-checked.
   sheet. No new numerics — it tabulates the per-section solve through
   `change_of_state` for the field crew (IEEE 524 stringing practice).
 
+### G15 — Production plan & profile sheets — *stage 9* — ADR-0024
+
+G6 delivered the plan-&-profile *seam* — one shared `analysis` feeding a Markdown report
+and an SVG plot. G15 turns that plot into the **document a line engineer recognises**:
+
+- **Paginated, physically-sized sheets.** `sheet.rs` grows a `PageSize` (**A1**
+  594×841 mm default, **A0** 841×1189 mm, or custom), authored in `mm` so it prints 1:1
+  and imports to CAD at true scale. The line is drawn at a **fixed horizontal/vertical
+  scale** (e.g. 1:2400 / 1:480, V.E. 5×) and **split into sheets by station** with a
+  **match line** between them; `plan_profile_sheets(project, &layout)` returns an ordered
+  `Vec` of SVGs. The existing `plan_profile_svg` stays as the fit-to-one preview / GUI
+  live view.
+- **Configurable label sets** via a `SheetLayout` mirroring the reference tool's tabs:
+  **structure labels** (number, station on by default; X/Y, height & elevation,
+  height/leg adjustment, orientation, offset, embedded length, attachment height/elevation,
+  line angle, comments optional), **section labels** (structure range, cable file, ruling
+  span, design tension on by default; voltage, phases/wires, weather case, legend
+  optional), **span-length** and **wire** labels, and the **plan/inset** view content
+  (centerline, structures, RoW edges, stationing, crossings; ortho raster when present).
+  Each field maps to a value already in `Tower`/`Wire`/section/`Poi` or `Analysis`.
+- **Title, notes & legend blocks.** A lower-right **title block** from `Project::metadata`
+  (owner/agency, line name, voltage, drawing/sheet `n of N`, dates, revision/supersedes —
+  metadata extended via a round-trip-tested `.atldp` bump, defaulting empty for legacy
+  projects), a **notes block** (loading code/weather case, conductor & OPGW specs, ruling
+  span, tension at a reference condition, ground clearance, max operating temp,
+  terrain/imagery provenance, ATLDP version), and a **legend**.
+- **No new numerics** — every value is read from the model or `Analysis`; tests assert
+  sheet *structure* (well-formed SVG, page count for a station range, presence of selected
+  labels and title-block fields), as the G6 sheet tests already do. SVG-only,
+  string-built, zero new deps. Phasing/leg-extension diagrams and full ortho-raster
+  compositing are designed in as optional blocks and may land incrementally; the schematic
+  plan strip is the fallback until the corridor raster (ADR-0022) exists.
+
 ### Then — automatic spotting & dynamics
 
 - **Automatic spotting** (the original Phase 5): a cost-minimizing optimizer that
@@ -215,10 +249,11 @@ that are already cross-checked.
   source; the closed-form catenary identities (Irvine) are a second independent
   oracle. The retired Python `core/` lives on as committed cross-check fixtures
   (`crates/atldp-core/tests/fixtures/`).
-- Most G7–G14 work is **additive over these validated numerics** — multi-wire,
-  sections, the route/POI model, load cases, and stringing tables orchestrate the same
-  solver, so the existing suite keeps gating correctness and new tests cover the
-  orchestration (and the v2→v3 migration). The delivered G7–G10 orchestration is
+- Most G7–G15 work is **additive over these validated numerics** — multi-wire,
+  sections, the route/POI model, load cases, stringing tables, and the production sheets
+  orchestrate or draw the same solver output, so the existing suite keeps gating
+  correctness and new tests cover the orchestration and rendering (and the schema
+  migrations). The delivered G7–G10 orchestration is
   covered in `atldp-model` (section partitioning, v1→v2 **and v2→v3** schema migration,
   chart envelopes, multi-wire fan-out, the route/POI pinning rules, and the family
   attachment geometry / wire-offset reconciliation) and `atldp-geo` (the polyline
@@ -277,6 +312,11 @@ that are already cross-checked.
   source of truth; `Project::reconcile_wire_offsets` copies each attachment point's
   offsets onto the matching wire by index, leaving conductor spec and tension on the
   `Wire`.
+- **Production sheet layout (G15, ADR-0024):** the `PageSize`/`SheetLayout` representation,
+  the station-pagination + match-line rule at a fixed drawing scale, the title-block fields
+  added to `Project::metadata` (and their `.atldp` migration), and how dense label stacks
+  avoid collision at close structure spacing. Proposed in ADR-0024; resolution lands with
+  the phase.
 - **1 m corridor source (G13):** how far DEM interpolation is trusted before a
   surveyed LiDAR/contour source is required, and the ingestion path for it.
 - Maturity of the pure-Rust geospatial stack (`proj4rs` CRS coverage, `laz-rs` decode
