@@ -60,4 +60,4 @@ phases G7–G15 in the [implementation plan](../IMPLEMENTATION_PLAN.md).
 | [0022](0022-srtm-area-selection-and-plan-view-route-editor.md) | SRTM area selection and the plan-view route editor | Accepted (G10c route editor + terrain set; online-basemap/file-dialog import deferred) |
 | [0023](0023-angle-as-deflection-derived-property.md) | Angle as a deflection-derived property, not a structure function | Accepted (G10c) |
 | [0024](0024-production-plan-and-profile-sheets.md) | Production plan & profile sheets (paginated, A1/A0, full label sets) | Proposed |
-| [0025](0025-osm-basemap-and-shared-map-image.md) | OSM basemap and a shared map raster for the plan & 3D views | Proposed |
+| [0025](0025-osm-basemap-and-shared-map-image.md) | OSM basemap and a shared map raster for the plan & 3D views | Accepted (plan-view basemap delivered G10d; 3-D drape pending) |

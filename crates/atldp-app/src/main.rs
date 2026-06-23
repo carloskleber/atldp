@@ -44,6 +44,9 @@ use atldp_render::{
     terrain_mesh::{TerrainMeshResources, TerrainVertex},
 };
 
+mod basemap;
+use basemap::{BasemapFetcher, MapImage};
+
 // ── conductor weight ──────────────────────────────────────────────────────────
 const CONDUCTOR_W_N_PER_M: f64 = 15.97; // ACSR Drake
 const CATENARY_SAMPLES: usize = 80;
@@ -82,6 +85,9 @@ struct TerrainData {
     profile_total_dist: f64,
     /// Provenance of the DEM (tile set + working bounds), carried into projects.
     source: TerrainRef,
+    /// Optional cached OSM basemap covering the working area (G10d, ADR-0025); the
+    /// plan view textures the DEM with it, falling back to hypsometric shading.
+    basemap: Option<MapImage>,
 }
 
 impl TerrainData {
@@ -162,6 +168,7 @@ impl TerrainData {
             profile: Vec::new(),
             profile_total_dist: 1.0,
             source,
+            basemap: None,
         };
         t.recompute();
         Some(t)
@@ -464,6 +471,13 @@ struct AppState {
     report_preview: Option<String>,
     sheet_svg: Option<String>,
     sheet_texture: Option<egui::TextureHandle>,
+
+    // G10d plan-view camera (local-plane metres) + OSM basemap (ADR-0025).
+    plan_center: [f32; 2],
+    /// Plan-view scale, screen pixels per metre; `0` ⇒ fit on the first frame.
+    plan_ppm: f32,
+    basemap_fetcher: Option<BasemapFetcher>,
+    basemap_tex: Option<egui::TextureHandle>,
 }
 
 impl AppState {
@@ -599,6 +613,10 @@ impl AppState {
             report_preview: None,
             sheet_svg: None,
             sheet_texture: None,
+            plan_center: [0.0, 0.0],
+            plan_ppm: 0.0,
+            basemap_fetcher: None,
+            basemap_tex: None,
         }
     }
 
@@ -708,6 +726,10 @@ impl AppState {
                     terrain.recompute();
                 }
                 self.terrain = Some(terrain);
+                // New working area — drop the stale basemap and refit the plan view.
+                self.basemap_tex = None;
+                self.basemap_fetcher = None;
+                self.plan_ppm = 0.0;
             }
         }
         self.towers = p.towers;
@@ -895,6 +917,33 @@ impl AppState {
         let aspect = size.width as f32 / size.height.max(1) as f32;
         let view_proj = self.orbit.view_proj(aspect).to_cols_array_2d();
 
+        // Poll a background OSM basemap fetch (G10d, ADR-0025).
+        let polled = self.basemap_fetcher.as_mut().and_then(|f| f.poll());
+        if let Some(result) = polled {
+            self.basemap_fetcher = None;
+            match result {
+                Some(img) => {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(
+                        [img.width as usize, img.height as usize],
+                        &img.rgba,
+                    );
+                    self.basemap_tex = Some(ui.ctx().load_texture(
+                        "osm_basemap",
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                    if let Some(t) = &mut self.terrain {
+                        t.basemap = Some(img);
+                    }
+                    self.status = "OSM basemap loaded.".to_string();
+                }
+                None => {
+                    self.status =
+                        "Basemap unavailable (offline or no tiles) — using shading.".to_string();
+                }
+            }
+        }
+
         // ── toolbar ──
         egui::Panel::top("toolbar")
             .exact_size(32.0)
@@ -947,6 +996,35 @@ impl AppState {
                             // Editing the route re-stations the line and orphans the
                             // spotted towers — confirm before clearing them (G10d).
                             self.confirm_route_edit = true;
+                        }
+                    }
+
+                    // G10d (ADR-0025): user-triggered OSM basemap for the work area.
+                    let fetching = self.basemap_fetcher.is_some();
+                    let basemap_label = if fetching {
+                        "⏳ Basemap…"
+                    } else {
+                        "🌍 Basemap"
+                    };
+                    if ui
+                        .add_enabled(
+                            self.terrain.is_some() && !fetching,
+                            egui::Button::new(basemap_label),
+                        )
+                        .on_hover_text("Fetch an OpenStreetMap basemap for the work area")
+                        .clicked()
+                    {
+                        if let Some(t) = &self.terrain {
+                            let b = t.source.bounds;
+                            let bounds = GeoBounds {
+                                lat_min: b.lat_min,
+                                lat_max: b.lat_max,
+                                lon_min: b.lon_min,
+                                lon_max: b.lon_max,
+                            };
+                            self.basemap_fetcher =
+                                Some(BasemapFetcher::spawn(bounds, basemap::cache_dir()));
+                            self.status = "Fetching OSM basemap…".to_string();
                         }
                     }
 
@@ -1252,7 +1330,14 @@ impl AppState {
                 });
             });
 
-        // ── dock area (3D + 2D views) ──
+        // ── dock area (plan / 3D / 2D views) ──
+        // Resolve the basemap (texture + its geo bounds) before the mutable terrain
+        // borrow the Viewer takes — `bounds` is `Copy`, so this holds no terrain ref.
+        let basemap = self.basemap_tex.as_ref().zip(
+            self.terrain
+                .as_ref()
+                .and_then(|t| t.basemap.as_ref().map(|b| b.bounds)),
+        );
         egui::CentralPanel::default().show_inside(ui, |ui| {
             egui_dock::DockArea::new(&mut self.dock_state)
                 .style(egui_dock::Style::from_egui(ui.style()))
@@ -1272,6 +1357,9 @@ impl AppState {
                         attachment_height_m: self.attachment_height_m,
                         h_tension_n: self.h_tension_n,
                         min_clearance_m: self.min_clearance_m,
+                        plan_center: &mut self.plan_center,
+                        plan_ppm: &mut self.plan_ppm,
+                        basemap,
                     },
                 );
         });
@@ -1405,6 +1493,10 @@ struct Viewer<'a> {
     attachment_height_m: f64,
     h_tension_n: f64,
     min_clearance_m: f64,
+    // G10d plan-view camera (local-plane metres) + optional basemap drape.
+    plan_center: &'a mut [f32; 2],
+    plan_ppm: &'a mut f32,
+    basemap: Option<(&'a egui::TextureHandle, GeoBounds)>,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -1908,30 +2000,79 @@ impl Viewer<'_> {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(10, 12, 16));
 
-        // Fit the working DEM's local-plane extents into the rect, north up, equal
-        // aspect — the same plane the route POIs are projected through.
+        // Persistent plan camera in local-plane metres: centre + pixels-per-metre.
+        // `ppm <= 0` ⇒ fit the working DEM into the rect (first frame / after load).
         let half_e = (t.grid.east_m as f64 * 0.5).max(1.0);
         let half_n = (t.grid.north_m as f64 * 0.5).max(1.0);
-        let margin = 14.0_f64;
-        let scale = ((rect.width() as f64 - 2.0 * margin) / (2.0 * half_e))
-            .min((rect.height() as f64 - 2.0 * margin) / (2.0 * half_n))
-            .max(1e-6);
-        let (cx, cy) = (rect.center().x as f64, rect.center().y as f64);
-        let to_screen =
-            |e: f64, north: f64| egui::pos2((cx + e * scale) as f32, (cy - north * scale) as f32);
-        let from_screen =
-            |p: egui::Pos2| -> [f64; 2] { [(p.x as f64 - cx) / scale, (cy - p.y as f64) / scale] };
+        if *self.plan_ppm <= 0.0 {
+            let margin = 14.0_f64;
+            let fit = ((rect.width() as f64 - 2.0 * margin) / (2.0 * half_e))
+                .min((rect.height() as f64 - 2.0 * margin) / (2.0 * half_n))
+                .max(1e-6);
+            *self.plan_ppm = fit as f32;
+            *self.plan_center = [0.0, 0.0]; // grid is centred on the local origin
+        }
+        // Pan with a secondary (right) drag; zoom on scroll (route edits use the
+        // primary button, so panning never fights marker dragging).
+        if resp.dragged_by(egui::PointerButton::Secondary) {
+            let d = resp.drag_delta();
+            self.plan_center[0] -= d.x / *self.plan_ppm;
+            self.plan_center[1] += d.y / *self.plan_ppm;
+        }
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        if resp.hovered() && scroll != 0.0 {
+            *self.plan_ppm = (*self.plan_ppm * (1.0 + scroll * 0.01)).clamp(1e-5, 100.0);
+        }
 
-        // ── DEM raster as a hypsometric mesh (one draw call) ──
+        let ppm = *self.plan_ppm as f64;
+        let center = [self.plan_center[0] as f64, self.plan_center[1] as f64];
+        let (cx, cy) = (rect.center().x as f64, rect.center().y as f64);
+        let to_screen = |e: f64, north: f64| {
+            egui::pos2(
+                (cx + (e - center[0]) * ppm) as f32,
+                (cy - (north - center[1]) * ppm) as f32,
+            )
+        };
+        let from_screen = |p: egui::Pos2| -> [f64; 2] {
+            [
+                center[0] + (p.x as f64 - cx) / ppm,
+                center[1] - (p.y as f64 - cy) / ppm,
+            ]
+        };
+
+        // ── DEM raster: the OSM basemap draped on the grid, or hypsometric shading
+        // as the offline fallback (ADR-0025). One mesh, drawn through the camera.
         {
             let grid = &t.grid;
             let (lo, hi) = (grid.elev_min, grid.elev_max.max(grid.elev_min + 1.0));
-            let mut mesh = egui::Mesh::default();
+            let mut mesh = match self.basemap {
+                Some((tex, _)) => egui::Mesh::with_texture(tex.id()),
+                None => egui::Mesh::default(),
+            };
             for p in &grid.positions {
-                mesh.colored_vertex(
-                    to_screen(p[0] as f64, p[2] as f64),
-                    hypso_color(p[1], lo, hi),
-                );
+                let pos = to_screen(p[0] as f64, p[2] as f64);
+                match self.basemap {
+                    Some((_, bm)) => {
+                        let [lat, lon] = t.plane.to_geo(p[0] as f64, p[2] as f64);
+                        // Slippy tiles are Web Mercator: u is linear in lon, but v is
+                        // linear in mercator-y, not in latitude.
+                        let merc = |d: f64| {
+                            (std::f64::consts::FRAC_PI_4 + d.to_radians() / 2.0)
+                                .tan()
+                                .ln()
+                        };
+                        let u = ((lon - bm.lon_min) / (bm.lon_max - bm.lon_min)) as f32;
+                        let v = ((merc(bm.lat_max) - merc(lat))
+                            / (merc(bm.lat_max) - merc(bm.lat_min)))
+                            as f32;
+                        mesh.vertices.push(egui::epaint::Vertex {
+                            pos,
+                            uv: egui::pos2(u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)),
+                            color: egui::Color32::WHITE,
+                        });
+                    }
+                    None => mesh.colored_vertex(pos, hypso_color(p[1], lo, hi)),
+                }
             }
             for r in 0..grid.rows.saturating_sub(1) {
                 for c in 0..grid.cols.saturating_sub(1) {
@@ -2025,13 +2166,52 @@ impl Viewer<'_> {
             );
         }
 
+        // ── scale bar (adaptive 1–2–5) ──
+        {
+            let raw = 90.0 / ppm; // metres spanning ~90 px
+            let base = 10f64.powf(raw.log10().floor());
+            let mult = [1.0, 2.0, 5.0]
+                .into_iter()
+                .find(|m| m * base * ppm >= 40.0)
+                .unwrap_or(10.0);
+            let bar_m = mult * base;
+            let bar_px = (bar_m * ppm) as f32;
+            let y = rect.bottom() - 18.0;
+            let x0 = rect.left() + 12.0;
+            let stroke = egui::Stroke::new(2.0, egui::Color32::from_gray(220));
+            painter.line_segment([egui::pos2(x0, y), egui::pos2(x0 + bar_px, y)], stroke);
+            painter.line_segment([egui::pos2(x0, y - 4.0), egui::pos2(x0, y + 4.0)], stroke);
+            painter.line_segment(
+                [
+                    egui::pos2(x0 + bar_px, y - 4.0),
+                    egui::pos2(x0 + bar_px, y + 4.0),
+                ],
+                stroke,
+            );
+            let label = if bar_m >= 1000.0 {
+                format!("{:.0} km", bar_m / 1000.0)
+            } else {
+                format!("{bar_m:.0} m")
+            };
+            painter.text(
+                egui::pos2(x0 + bar_px * 0.5, y - 5.0),
+                egui::Align2::CENTER_BOTTOM,
+                label,
+                egui::FontId::monospace(10.0),
+                egui::Color32::from_gray(220),
+            );
+        }
+
+        let basemap_note = if self.basemap.is_some() {
+            "OSM basemap"
+        } else {
+            "hypsometric (no basemap)"
+        };
         painter.text(
-            rect.left_bottom() + egui::vec2(6.0, -6.0),
-            egui::Align2::LEFT_BOTTOM,
+            rect.right_bottom() + egui::vec2(-6.0, -6.0),
+            egui::Align2::RIGHT_BOTTOM,
             format!(
-                "{:.0}×{:.0} km · {} points · {:.1} km route · north ↑",
-                t.grid.east_m / 1000.0,
-                t.grid.north_m / 1000.0,
+                "{} points · {:.1} km route · {basemap_note} · north ↑ · right-drag pan, scroll zoom",
                 t.route.len(),
                 t.profile_total_dist / 1000.0,
             ),

@@ -1,6 +1,7 @@
 # ADR-0025 — OpenStreetMap basemap and a shared map raster for the plan & 3D views
 
-- Status: Proposed
+- Status: Accepted (plan-view basemap + camera delivered G10d, 2026-06-23; the 3-D
+  textured-terrain drape — a new wgpu surface pipeline — remains)
 - Date: 2026-06-23
 - Builds on: [ADR-0012](0012-desktop-gui-wgpu-egui.md) (GUI / rendering),
   [ADR-0013](0013-pure-rust-geospatial-stack.md) (pure-Rust, offline-first geospatial

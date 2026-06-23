@@ -29,3 +29,6 @@ winit = "0.30.13"
 # stay as the headless fallback); resvg rasterizes the SVG sheet for in-app preview.
 rfd = "0.15"
 resvg = "0.45"
+# G10d: optional, cached OSM basemap (ADR-0025) — imagery only, numerics stay offline.
+ureq = "2.12"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
