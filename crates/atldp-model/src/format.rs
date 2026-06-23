@@ -80,6 +80,9 @@ fn migrate_value(value: &mut serde_json::Value, from_version: u32) {
     if from_version < 3 {
         migrate_v2_to_v3(value);
     }
+    if from_version < 4 {
+        migrate_v3_to_v4(value);
+    }
 }
 
 /// v1 → v2 (G7/G8): wrap the single `conductor` strung at
@@ -178,6 +181,66 @@ fn migrate_v2_to_v3(value: &mut serde_json::Value) {
             );
         }
     }
+    obj.insert(
+        "schema_version".to_string(),
+        serde_json::json!(SCHEMA_VERSION),
+    );
+}
+
+/// v3 → v4 (G10c, ADR-0022/0023). Two corrections to delivered G9/G10 data:
+///
+/// - **Terrain becomes a tile set + bounds.** A v3 `terrain` is a single
+///   `{source_path, sw_lat, sw_lon}` tile; wrap it as a one-element `tiles` set
+///   whose working `bounds` is the full 1°×1° tile, so the project reproduces its
+///   results on the same data.
+/// - **"Angle" stops being a structure function.** Any stored `function: "angle"`
+///   (on a tower or a family) maps to `"suspension"` — the running-angle default
+///   (ADR-0023). A tower keeps its `line_angle_deg`, so it stays an *angle
+///   structure* (a deflection-derived property) without an `Angle` variant.
+fn migrate_v3_to_v4(value: &mut serde_json::Value) {
+    let serde_json::Value::Object(obj) = value else {
+        return;
+    };
+
+    // Terrain: single tile → { tiles: [tile], bounds: full tile }.
+    if let Some(terrain) = obj.get("terrain").filter(|t| !t.is_null()).cloned() {
+        // Already migrated (has `tiles`)? Leave it.
+        if terrain.get("tiles").is_none() {
+            let sw_lat = terrain.get("sw_lat").and_then(|v| v.as_i64()).unwrap_or(0);
+            let sw_lon = terrain.get("sw_lon").and_then(|v| v.as_i64()).unwrap_or(0);
+            let source_path = terrain
+                .get("source_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let (lat, lon) = (sw_lat as f64, sw_lon as f64);
+            obj.insert(
+                "terrain".to_string(),
+                serde_json::json!({
+                    "tiles": [{ "source_path": source_path, "sw_lat": sw_lat, "sw_lon": sw_lon }],
+                    "bounds": {
+                        "lat_min": lat, "lat_max": lat + 1.0,
+                        "lon_min": lon, "lon_max": lon + 1.0,
+                    }
+                }),
+            );
+        }
+    }
+
+    // Drop the removed `Angle` function: map it to the running-angle suspension.
+    let demote_angle = |item: &mut serde_json::Value| {
+        if let Some(f) = item.get_mut("function") {
+            if f.as_str() == Some("angle") {
+                *f = serde_json::json!("suspension");
+            }
+        }
+    };
+    for key in ["towers", "families"] {
+        if let Some(arr) = obj.get_mut(key).and_then(|v| v.as_array_mut()) {
+            arr.iter_mut().for_each(demote_angle);
+        }
+    }
+
     obj.insert(
         "schema_version".to_string(),
         serde_json::json!(SCHEMA_VERSION),
@@ -342,6 +405,78 @@ mod tests {
             route.pois[0].kind.pinned_function(),
             Some(crate::StructureFunction::Anchor)
         );
+    }
+
+    /// A v3 project carries a single-tile terrain and may type a structure as the
+    /// removed `Angle` function. v3→v4 wraps the tile as a one-element set with
+    /// bounds = the full tile, and demotes `Angle` to a running-angle `Suspension`
+    /// that keeps its deflection (ADR-0022/0023).
+    #[test]
+    fn migrates_v3_to_v4_terrain_set_and_demotes_angle() {
+        let v3 = serde_json::json!({
+            "schema_version": 3,
+            "metadata": { "name": "Legacy v3", "notes": "" },
+            "wires": [{
+                "name": "Phase", "role": "phase",
+                "conductor": {
+                    "name": "ACSR Drake 26/7", "unit_weight_n_per_m": 15.97,
+                    "diameter_m": 0.0281, "rated_strength_n": 140_100.0
+                },
+                "vertical_offset_m": 0.0, "lateral_offset_m": 0.0, "tension_n": 30_000.0
+            }],
+            "parameters": {
+                "horizontal_tension_n": 30_000.0, "attachment_height_m": 15.0,
+                "min_clearance_m": 8.0, "wind_pressure_pa": 700.0
+            },
+            "families": [
+                { "name": "Light angle", "function": "angle",
+                  "min_height_m": 18.0, "max_height_m": 33.0, "default_height_m": 24.0,
+                  "chart": { "points": [], "max_line_angle_deg": 20.0 } }
+            ],
+            "terrain": { "source_path": "S23W043.hgt", "sw_lat": -23, "sw_lon": -43 },
+            "route": { "pois": [
+                { "kind": "terminal", "lat": -23.0, "lon": -43.0, "distance_m": 0.0,
+                  "ground_elevation_m": 100.0, "deviation_angle_deg": 0.0, "name": "A" },
+                { "kind": "angle", "lat": -22.9, "lon": -42.9, "distance_m": 500.0,
+                  "ground_elevation_m": 90.0, "deviation_angle_deg": 18.0, "name": "P" },
+                { "kind": "terminal", "lat": -22.8, "lon": -42.8, "distance_m": 1000.0,
+                  "ground_elevation_m": 120.0, "deviation_angle_deg": 0.0, "name": "B" }
+            ] },
+            "ground_profile": [
+                { "distance_m": 0.0, "elevation_m": 100.0 },
+                { "distance_m": 1000.0, "elevation_m": 120.0 }
+            ],
+            "towers": [
+                { "distance_m": 500.0, "ground_elevation_m": 90.0, "attachment_height_m": 15.0,
+                  "function": "angle", "line_angle_deg": 18.0 }
+            ]
+        })
+        .to_string();
+
+        let p = from_atldp_str(&v3).unwrap();
+        assert_eq!(p.schema_version, SCHEMA_VERSION);
+
+        // Terrain: one-element tile set, working bounds = the full tile.
+        let terrain = p.terrain.expect("terrain carried forward");
+        assert_eq!(terrain.tiles.len(), 1);
+        assert_eq!(terrain.tiles[0].sw_lat, -23);
+        assert_eq!(terrain.tiles[0].source_path, "S23W043.hgt");
+        assert_eq!(terrain.bounds.lat_min, -23.0);
+        assert_eq!(terrain.bounds.lat_max, -22.0);
+        assert_eq!(terrain.bounds.lon_max, -42.0);
+
+        // The Angle structure became a suspension but kept its deflection ⇒ still an
+        // angle structure, and being non-anchor it does not break the section.
+        let t = &p.towers[0];
+        assert_eq!(t.function, crate::StructureFunction::Suspension);
+        assert!((t.line_angle_deg - 18.0).abs() < 1e-9);
+        assert!(t.is_angle());
+        // The light-angle family is likewise a suspension now.
+        assert_eq!(p.families[0].function, crate::StructureFunction::Suspension);
+        // The angle POI still obliges a structure without fixing its function.
+        let angle_poi = &p.route.unwrap().pois[1];
+        assert!(angle_poi.kind.requires_structure());
+        assert_eq!(angle_poi.kind.pinned_function(), None);
     }
 
     #[test]

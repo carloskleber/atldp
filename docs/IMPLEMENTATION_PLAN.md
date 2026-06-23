@@ -2,11 +2,16 @@
 
 This translates the project's goals (see [README](../README.md)) into a phased,
 verifiable plan, and points to the architectural decisions that back it (see
-[adr/](adr/)). It is a living document: phases **G0–G10 are delivered** — the workflow
-was **reprioritised on 2026-06-21** (ADR-0019–0021) around the real design workflow,
-and the first two of those phases are now in: an explicit route/POI model with
-obligatory angle structures (**G9**, ADR-0019) and the tower-elevation view with real
-attachment geometry (**G10**, ADR-0020). The next step is bringing the FEM section
+[adr/](adr/)). It is a living document: phases **G0–G10c are delivered** — the workflow
+was **reprioritised on 2026-06-21** (ADR-0019–0021) around the real design workflow:
+an explicit route/POI model with obligatory angle structures (**G9**, ADR-0019), the
+tower-elevation view with real attachment geometry (**G10**, ADR-0020), and the
+**plan-view route editor** that finally lets the engineer *draw* the route on the
+terrain — with a tile-set/working-bounds terrain model and the angle correction
+(**G10c**, ADR-0022/0023). The immediate next step polishes that authoring surface —
+pan/zoom, a shared **OpenStreetMap basemap** for the plan and 3-D views, interactive
+drafting dialogs, and route-editor safety fixes (**G10d**, ADR-0025) — followed by
+bringing the FEM section
 solver forward for uneven spans (**G11**, ADR-0021), ahead of the previously-planned
 standards load cases, ~1 m terrain, and stringing tables, which move to **G12–G14**
 (ADR-0017–0018), and the **production plan-&-profile sheets** that turn the G6 plot into
@@ -79,7 +84,7 @@ The pipeline rests on these largely independent computational modules:
 | **Structure model** | wind/weight/longitudinal span loads, lattice & guyed-tower checks | 8 | IEC 60826; NBR 5422 |
 | **Drafting, reporting & stringing table** | **paginated A1/A0 plan & profile sheets** (configurable structure/section/span/wire labels, title/notes/legend blocks), calculation reports, field stringing chart | 9 | IEEE 524; ADR-0009/0024 |
 
-## Delivered — native build track (Phases G0–G10, complete)
+## Delivered — native build track (Phases G0–G10c, complete)
 
 The production app is built natively in Rust (ADR-0011/0012/0013). The sag-tension
 core (stage 7) was built first — highest risk, highest value, and the validation
@@ -103,46 +108,42 @@ summary:
 | **G8** | **Structure-family library** (`model::StructureFamily`: function, height range, **application chart** = piecewise wind-span × weight-span × angle envelope); a `Tower` references a family + height with per-structure overrides. `analysis` checks each placement's loads against its chart and flags violations — the constraint oracle the Phase-5 optimizer will select against. | 2026-06-21 |
 | **G9** | **Route / POI model & mandatory angle structures** (ADR-0019): an explicit `model::Route` of kinded `Poi` vertices (terminal / angle / crossing / obstacle / constraint), each with the structure function it obliges (`PoiKind::pinned_function`); the ground profile is **derived** from the route polyline (`geo::extract_profile_polyline`, continuous stationing across bends). `Tower` gains an `origin_poi` link; the GUI right panel is now an **editable tower table** (function/family/height per row) that **re-partitions tension sections live**. `.atldp` `SCHEMA_VERSION` → **3** with a round-trip-tested v2→v3 migration (synthesise a terminal→terminal route from the legacy profile endpoints). | 2026-06-21 |
 | **G10** | **Structure geometry & tower-elevation view** (ADR-0020): `StructureFamily` gains a drawable `AttachmentGeometry` — per-conductor attachment points (role, lateral/vertical offset) plus a body/crossarm silhouette — the single source of truth for where each wire attaches (`Project::reconcile_wire_offsets`). A new **tower-elevation tab** in `atldp-app` draws the selected structure's silhouette with every attachment point labelled by wire and its resulting conductor elevation. "Choosing a structure" becomes inspecting a real shape. | 2026-06-21 |
+| **G10d (fixes)** | **Route-editor correctness & interactive drafting** (ADR-0006/0022 follow-ups). The 2-D profile draws as the **ground line only** (the axis-anchored `convex_polygon` fan is gone; the SVG sheet already used a true polygon). Entering **route-edit mode with towers present raises a confirmation** that clears the now-orphaned spotting before re-stationing. Report/sheet exports stop being silent: each opens an **in-app preview** (report as text; sheet rasterized via `resvg`) with a **native `rfd` "save as…" dialog**; project **save/load** use native dialogs too (`ATLDP_*` env paths stay the headless fallback). The plan-view pan/zoom, OSM basemap, and 3-D drape remain (ADR-0025, below). | 2026-06-23 |
+| **G10c** | **Plan-view route editor & terrain set** (ADR-0022/0023). `atldp-geo` gains tile **`mosaic`** (stitch grid-aligned tiles across a seam) + **`Dem::crop`** (cell-aligned window). `TerrainRef` becomes a **set of source tiles + chosen working `AreaBounds`** (was a single tile); `.atldp` `SCHEMA_VERSION` → **4** with a round-trip-tested v3→v4 migration (single tile → one-element set over the full tile; any stored `Angle` function → running-angle `Suspension` keeping its deflection). A new **plan-view tab** renders the cropped DEM as a hypsometric raster with the **editable route** drawn on it: in route-edit mode, clicking empty map inserts an angle `Poi` on the nearest leg, dragging moves a vertex, the selected vertex's kind is editable, and every edit re-runs `extract_profile_polyline` (re-stationing, ground-sampling, deflection angles) so the profile and tower table update live. The hard-coded diagonal is gone — `TerrainData` carries the real route and project save/load resolves the tile set (mosaic + crop). **ADR-0023:** `StructureFunction` drops `Angle` (now `Suspension`/`Anchor`); "angle" is a deflection-derived property of the location (`Tower::is_angle`, gated by the family chart's `max_line_angle_deg`); `PoiKind::pinned_function` splits into `requires_structure` + an optional fixed function (only terminals fix `Anchor`). | 2026-06-23 |
 
 These phases deliver a working **multi-wire, multi-section** line tool with a
-structure-family library, an explicit route the profile derives from, and structures
-seen as real shapes. The route model exists but is not yet *drawn* — the immediate
-GUI follow-on (G10c, ADR-0022) gives it an authoring surface, ahead of the FEM section
-solver (G11) and the standards/terrain/field-output work that follows.
+structure-family library, an explicit route the profile derives from, structures
+seen as real shapes, and — since G10c — a **plan view the route is drawn on**, ahead
+of the FEM section solver (G11) and the standards/terrain/field-output work that
+follows.
 
-## Next — interactive route authoring (Phase G10c) — ADR-0022
+## Next — plan-view basemap & interaction (Phase G10d, remainder) — ADR-0025
 
-G9 made the route the primary plan artefact and G10 drew the structure; what the app
-still cannot do is **let the engineer choose the terrain area and draw the route on
-it** — today it loads a whole HGT tile and uses a hard-coded diagonal corridor. G10c
-closes ADR-0019's deferred authoring GUI. It is representational/GUI work over the
-already-validated route model and DEM ingest, independent of the G11 numerics, so it
-can run alongside or just ahead of G11.
+G10c made the route *drawable*; G10d makes the authoring surface **usable and
+recognizable**. The **authoring fixes landed first** (see the G10d (fixes) row above,
+2026-06-23): profile-line-only rendering, the route-edit-clears-spotting confirmation,
+and interactive `rfd` save dialogs with in-app report/sheet previews. What remains is
+the **OpenStreetMap basemap shared by the plan and 3-D views** plus plan-view pan/zoom
+(ADR-0025) — the larger, network/dependency-bearing piece. Independent of the G11
+numerics; can land alongside or just ahead of G11.
 
-### G10c — SRTM area selection & plan-view route editor — *stages 1, 4–5* — ADR-0022
+### G10d remainder — shared OSM basemap & plan-view camera — *stages 1, 4* — ADR-0025
 
-- A **define-project step** (workflow stage 1): pick the line endpoints on an overall
-  (online) basemap; the area of interest defaults to their bounding box plus a routing
-  buffer.
-- An **import-area step**: from that area, resolve and select the SRTM HGT tiles needed
-  (file picker; `ATLDP_TERRAIN` stays the headless/dev fallback). `atldp-geo` gains tile
-  **mosaic** (stitch adjacent `Dem`s) and `Dem::crop` so a route may cross a tile seam
-  and the working extent stays small; `TerrainRef` carries the tile set + chosen bounds.
-- A **plan-view tab** (the plan-frame sibling of the line-frame profile and the G10
-  structure-frame elevation) rendering the cropped DEM, on which a **route-edit mode**
-  places/drags/kinds `Poi` vertices. Each edit re-runs `geo::extract_profile_polyline`
-  to recompute the derived `ground_profile`, re-stations POIs, and pins obligatory
-  structures (`Route::pinned_structures`) — the profile and editable tower table (G9)
-  update live. The hard-coded diagonal is removed.
-- A **structure-typing correction (ADR-0023):** drop `StructureFunction::Angle` —
-  function is `Suspension` or `Anchor`, and "angle" is a deflection-derived property
-  gated by the family chart. Touches `pinned_function`, `tension_sections`, the tower
-  table's function selector, and the chart deviation check.
-- `.atldp` `SCHEMA_VERSION` → **4** with a round-trip-tested v3→v4 migration (a single
-  tile becomes a one-element tile set with bounds = the full tile; any stored `Angle`
-  function maps to `Suspension` at a POI that keeps its deviation, per ADR-0023). No new
-  numerics; the drawn route feeds the existing polyline-profile → spotting → analysis
-  pipeline.
+- **Pan, zoom & a scale bar.** The plan view gets a persistent plan camera (centre in
+  local-plane metres + pixels-per-metre, init to fit), right-drag pan, scroll zoom, and
+  an adaptive **scale bar** — replacing the fit-every-frame transform. The route markers
+  and DEM raster transform through the one camera.
+- **OpenStreetMap basemap.** For the working bounds, fetch/cache OSM raster tiles on a
+  background thread and composite them into one georeferenced **map image** rendered as
+  the plan-view background (under the route), with the **hypsometric shading as the
+  offline fallback**. Imagery only — terrain numerics stay offline (ADR-0013/0025).
+- **3D reflects the plan image.** The same map image **textures the 3-D terrain mesh**
+  (`atldp-render::terrain_mesh` gains per-vertex UVs from each grid vertex's geographic
+  position + a sampled texture), so plan and 3-D show the same drape and stay
+  registered through the shared `LocalPlane`.
+- `.atldp` impact: none required for the fixes; the basemap is a cache, not project
+  state (the `TerrainRef` tile set + bounds already pin what to re-fetch). Any new field
+  (e.g. a chosen tile provider) rides a `#[serde(default)]` add, no schema bump.
 
 ## Next — uneven-span mechanics (Phase G11)
 
@@ -296,14 +297,25 @@ and an SVG plot. G15 turns that plot into the **document a line engineer recogni
   POI obliges *a* structure (not a specific function), and "angle" is derived from the
   POI's deviation, gated by the family chart's `max_line_angle_deg`. This correction is
   folded into the G10c v3→v4 schema bump (see below).
-- **Area selection & route authoring (G10c, ADR-0022):** how the import area maps to a
+- ~~**Area selection & route authoring (G10c, ADR-0022):** how the import area maps to a
   cropped/mosaicked DEM and the v3→v4 `TerrainRef` (single tile → tile set + bounds), and
-  how plan-view POI edits re-derive the profile and re-pin structures live. Proposed in
-  ADR-0022; resolution lands with the phase.
+  how plan-view POI edits re-derive the profile and re-pin structures live.~~
+  **Resolved (route editor):** `atldp-geo` `mosaic` + `Dem::crop` produce the working
+  DEM; `TerrainRef` is a `Vec<TerrainTile>` + `AreaBounds`; `TerrainData` holds the
+  editable `Vec<Poi>` and `recompute()` re-stations, ground-samples, and re-derives the
+  profile (`extract_profile_polyline`) on every plan-view edit. **Still open:** the
+  stage-1 online-basemap endpoint picker and the interactive multi-tile/area file-dialog
+  import (see "Remaining G10c follow-on" above).
 - **FEM kernel selection (G11):** the precise geometric criterion that switches a
   section from the analytic ruling span to the FEM solver (span-unevenness ratio,
   inclination, operating temperature), and the validated agreement tolerance between
   them (ADR-0021/0008).
+- **Basemap source & policy (G10d, ADR-0025):** which tile provider/style and the
+  zoom-selection rule for a window; OSM tile-usage-policy compliance (User-Agent,
+  cache, request volume) vs. a self-hosted/permissive alternative; texture-memory
+  budget for the 3-D drape; and the HTTP/decoder/SVG-raster dependencies (`ureq`,
+  `image`, `resvg`) against the < 30 MB binary gate. Proposed in ADR-0025; resolution
+  lands with the phase.
 - ~~**Structure geometry data (G10):** the representation of a family's attachment /
   silhouette geometry, and how it reconciles with the per-`Wire` offsets introduced in
   G7 (ADR-0020).~~ **Resolved:** an `AttachmentGeometry` on `StructureFamily` — an

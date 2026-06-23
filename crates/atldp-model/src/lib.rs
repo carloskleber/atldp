@@ -32,7 +32,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - **v3** (G9/G10): an explicit [`Route`] of [`Poi`] vertices the profile is
 ///   derived from, the per-tower [`origin_poi`](Tower::origin_poi) link, and the
 ///   family [`AttachmentGeometry`] that draws the tower-elevation view.
-pub const SCHEMA_VERSION: u32 = 3;
+/// - **v4** (G10c): [`TerrainRef`] carries a **set** of source tiles plus the
+///   chosen working [`AreaBounds`](TerrainRef::bounds) (was a single tile), and
+///   "angle" stops being a [`StructureFunction`] — it is a deflection-derived
+///   property of the location (ADR-0022/0023).
+pub const SCHEMA_VERSION: u32 = 4;
 
 // ── project model ───────────────────────────────────────────────────────────────
 
@@ -347,16 +351,68 @@ impl Default for Parameters {
     }
 }
 
-/// Provenance of the terrain source — enough to re-locate and re-load the DEM,
-/// but the elevations themselves live in [`Project::ground_profile`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TerrainRef {
-    /// Path to the DEM tile as known when the project was saved.
+/// One source DEM tile referenced by a project (G10c, ADR-0022).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerrainTile {
+    /// Path to the HGT tile as known when the project was saved.
     pub source_path: String,
     /// South-west corner latitude of the tile, degrees (HGT convention).
     pub sw_lat: i32,
     /// South-west corner longitude of the tile, degrees.
     pub sw_lon: i32,
+}
+
+impl TerrainTile {
+    /// A tile reference from its path and SW-corner integer degrees.
+    pub fn new(source_path: impl Into<String>, sw_lat: i32, sw_lon: i32) -> Self {
+        TerrainTile {
+            source_path: source_path.into(),
+            sw_lat,
+            sw_lon,
+        }
+    }
+}
+
+/// A geographic lat/lon working window in degrees — the project's chosen **area of
+/// interest**, cropped/mosaicked from the tile set (G10c, ADR-0022).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AreaBounds {
+    pub lat_min: f64,
+    pub lat_max: f64,
+    pub lon_min: f64,
+    pub lon_max: f64,
+}
+
+/// Provenance of the terrain source — enough to re-locate and re-load the DEM,
+/// but the elevations themselves live in [`Project::ground_profile`].
+///
+/// Since G10c (ADR-0022) the reference is a **set of source tiles** plus the chosen
+/// working [`bounds`](TerrainRef::bounds): a route may cross a tile seam (mosaic of
+/// adjacent tiles) and the working extent is the cropped window, not a whole
+/// 1°×1° tile.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerrainRef {
+    /// Source HGT tiles, in no particular order; stitched (mosaicked) when more
+    /// than one. Never empty for a project that has terrain.
+    pub tiles: Vec<TerrainTile>,
+    /// The chosen working window the DEM is cropped to.
+    pub bounds: AreaBounds,
+}
+
+impl TerrainRef {
+    /// A single-tile reference whose working window is the whole tile — the shape a
+    /// pre-G10c (v3) project had, and what its migration produces.
+    pub fn single_tile(source_path: impl Into<String>, sw_lat: i32, sw_lon: i32) -> Self {
+        TerrainRef {
+            tiles: vec![TerrainTile::new(source_path, sw_lat, sw_lon)],
+            bounds: AreaBounds {
+                lat_min: sw_lat as f64,
+                lat_max: sw_lat as f64 + 1.0,
+                lon_min: sw_lon as f64,
+                lon_max: sw_lon as f64 + 1.0,
+            },
+        }
+    }
 }
 
 /// One sampled ground elevation along the route.
@@ -373,8 +429,10 @@ pub struct ProfileSample {
 /// The kind of a route point of interest (G9, ADR-0019).
 ///
 /// A POI's kind decides whether it **obliges a structure** at its station: a
-/// conductor cannot turn in mid-span, so a [`Terminal`](PoiKind::Terminal) pins an
-/// anchor and an [`Angle`](PoiKind::Angle) pins at least an angle structure. The
+/// conductor cannot turn in mid-span, so both a [`Terminal`](PoiKind::Terminal) and
+/// an [`Angle`](PoiKind::Angle) require a structure there. Only the terminal fixes
+/// its *function* (an anchor); an angle requires *a* structure but leaves
+/// suspension-vs-anchor to the engineer, gated by the family chart (ADR-0023). The
 /// other kinds are routing waypoints that do not, by themselves, force a tower.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -393,14 +451,23 @@ pub enum PoiKind {
 }
 
 impl PoiKind {
-    /// The minimum [`StructureFunction`] a POI of this kind **obliges** at its
-    /// station, or `None` if it pins no structure (ADR-0019). A structure placed
-    /// at the POI may be stronger than this, never weaker.
+    /// Whether a POI of this kind **obliges a structure** at its station — a
+    /// conductor cannot turn or terminate in mid-span (ADR-0019/0023). `Terminal`
+    /// and `Angle` do; the routing waypoints (`Crossing`/`Obstacle`/`Constraint`)
+    /// do not.
+    pub fn requires_structure(self) -> bool {
+        matches!(self, PoiKind::Terminal | PoiKind::Angle)
+    }
+
+    /// The [`StructureFunction`] a POI of this kind **fixes**, or `None` if it
+    /// obliges a structure without fixing its function (ADR-0023). Only a
+    /// `Terminal` fixes one (an [`Anchor`](StructureFunction::Anchor)); an `Angle`
+    /// requires a structure but leaves suspension-vs-anchor to the engineer (gated
+    /// by the family's `max_line_angle_deg`), and the waypoints fix nothing.
     pub fn pinned_function(self) -> Option<StructureFunction> {
         match self {
             PoiKind::Terminal => Some(StructureFunction::Anchor),
-            PoiKind::Angle => Some(StructureFunction::Angle),
-            PoiKind::Crossing | PoiKind::Obstacle | PoiKind::Constraint => None,
+            PoiKind::Angle | PoiKind::Crossing | PoiKind::Obstacle | PoiKind::Constraint => None,
         }
     }
 
@@ -490,29 +557,39 @@ impl Route {
     }
 
     /// The POIs that **oblige a structure** (terminals and angle points), in route
-    /// order, each paired with the minimum [`StructureFunction`] it demands.
-    pub fn pinned_structures(&self) -> impl Iterator<Item = (&Poi, StructureFunction)> {
+    /// order, each paired with the [`StructureFunction`] it *fixes* — `Some(Anchor)`
+    /// for a terminal, `None` for an angle (the engineer chooses suspension or
+    /// anchor, gated by the chart; ADR-0023).
+    pub fn pinned_structures(&self) -> impl Iterator<Item = (&Poi, Option<StructureFunction>)> {
         self.pois
             .iter()
-            .filter_map(|p| p.kind.pinned_function().map(|f| (p, f)))
+            .filter(|p| p.kind.requires_structure())
+            .map(|p| (p, p.kind.pinned_function()))
     }
 }
 
 // ── structure typing & family library (G7/G8) ───────────────────────────────────
 
-/// The mechanical function of a spotted structure (G7).
+/// The mechanical function of a spotted structure (G7; corrected by ADR-0023).
 ///
 /// This typing is what partitions the line into **tension sections**: a section
 /// runs from one [`Anchor`](StructureFunction::Anchor) to the next (see
 /// [`tension_sections`]). The first and last structures are anchors implicitly.
+///
+/// There are exactly two functions — does the structure terminate the section or
+/// not. "Angle" is **not** a function: an angle structure is one that sits at a
+/// plan deflection (its origin [`Poi`] has a non-zero
+/// [`deviation_angle_deg`](Poi::deviation_angle_deg)), and it may be carried by
+/// either a suspension (running angle) or an anchor (strain angle). That choice is
+/// gated by the family's [`max_line_angle_deg`](ApplicationChart::max_line_angle_deg),
+/// not stored as a third variant (ADR-0023).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StructureFunction {
-    /// A tangent suspension structure (insulators swing freely, equalise tension).
+    /// A tangent / running suspension structure (insulators swing freely,
+    /// equalise tension); tension continues *through* it.
     #[default]
     Suspension,
-    /// An angle (running-angle suspension) structure.
-    Angle,
     /// An anchor / strain / dead-end structure — terminates the tension section.
     Anchor,
 }
@@ -528,7 +605,6 @@ impl StructureFunction {
     pub fn label(self) -> &'static str {
         match self {
             StructureFunction::Suspension => "suspension",
-            StructureFunction::Angle => "angle",
             StructureFunction::Anchor => "anchor",
         }
     }
@@ -759,9 +835,11 @@ impl StructureFamily {
                 chart: ApplicationChart::rectangular(450.0, -150.0, 600.0, 2.0),
                 geometry: AttachmentGeometry::single_circuit(),
             },
+            // A running (light) angle: a suspension carried at a plan deflection,
+            // its chart's max_line_angle_deg (20°) being the gate (ADR-0023).
             StructureFamily {
                 name: "Light angle".to_string(),
-                function: StructureFunction::Angle,
+                function: StructureFunction::Suspension,
                 min_height_m: 18.0,
                 max_height_m: 33.0,
                 default_height_m: 24.0,
@@ -846,6 +924,15 @@ impl Tower {
     pub fn is_pinned(&self) -> bool {
         self.origin_poi.is_some()
     }
+
+    /// Whether this is an **angle structure** — one that sits at a plan deflection
+    /// (a non-zero [`line_angle_deg`](Tower::line_angle_deg)). This is a derived
+    /// property of the *location*, not a function: an angle structure may be a
+    /// suspension (running angle) or an anchor (strain angle) (ADR-0023).
+    #[inline]
+    pub fn is_angle(&self) -> bool {
+        self.line_angle_deg.abs() > 1e-9
+    }
 }
 
 /// Partition the ordered towers into **tension sections** at every anchor (G7).
@@ -873,17 +960,20 @@ mod tests {
 
     #[test]
     fn poi_kind_pins_the_right_function() {
+        // A terminal both requires a structure and fixes it to an anchor.
+        assert!(PoiKind::Terminal.requires_structure());
         assert_eq!(
             PoiKind::Terminal.pinned_function(),
             Some(StructureFunction::Anchor)
         );
-        assert_eq!(
-            PoiKind::Angle.pinned_function(),
-            Some(StructureFunction::Angle)
-        );
-        assert_eq!(PoiKind::Crossing.pinned_function(), None);
-        assert_eq!(PoiKind::Obstacle.pinned_function(), None);
-        assert_eq!(PoiKind::Constraint.pinned_function(), None);
+        // An angle requires a structure but leaves the function open (ADR-0023).
+        assert!(PoiKind::Angle.requires_structure());
+        assert_eq!(PoiKind::Angle.pinned_function(), None);
+        // Routing waypoints oblige nothing.
+        for k in [PoiKind::Crossing, PoiKind::Obstacle, PoiKind::Constraint] {
+            assert!(!k.requires_structure());
+            assert_eq!(k.pinned_function(), None);
+        }
     }
 
     #[test]
@@ -916,9 +1006,11 @@ mod tests {
         let pinned: Vec<_> = route.pinned_structures().collect();
         // Two terminals + one angle ⇒ three pinned structures; the crossing pins none.
         assert_eq!(pinned.len(), 3);
-        assert_eq!(pinned[0].1, StructureFunction::Anchor);
-        assert_eq!(pinned[1].1, StructureFunction::Angle);
-        assert_eq!(pinned[2].1, StructureFunction::Anchor);
+        // Terminals fix an anchor; the angle obliges a structure but no function.
+        assert_eq!(pinned[0].1, Some(StructureFunction::Anchor));
+        assert_eq!(pinned[1].1, None);
+        assert_eq!(pinned[1].0.kind, PoiKind::Angle);
+        assert_eq!(pinned[2].1, Some(StructureFunction::Anchor));
     }
 
     #[test]

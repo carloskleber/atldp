@@ -27,8 +27,12 @@ terrain (see ADR-0009). ADR-0023 (2026-06-21) corrects ADR-0019's structure typi
 suspension or anchor). ADR-0024 (2026-06-22) grows the G6 plan-&-profile *plot* into
 **production sheets** — paginated to **A1/A0** at a fixed drawing scale, with the full
 configurable structure / section / span / wire label sets, a title block, and a
-notes/legend block — the stage-9 drafting deliverable. See phases G7–G15 in the
-[implementation plan](../IMPLEMENTATION_PLAN.md).
+notes/legend block — the stage-9 drafting deliverable. **ADR-0022 and ADR-0023 are
+accepted and implemented** (G10c, 2026-06-23: the plan-view route editor, the tile-set
+terrain model, and the angle correction). ADR-0025 (2026-06-23) proposes the **G10d**
+follow-on — an **OpenStreetMap basemap** shared by the plan and 3-D views (imagery only;
+numerics stay offline), plan-view pan/zoom, and the textured 3-D terrain drape. See
+phases G7–G15 in the [implementation plan](../IMPLEMENTATION_PLAN.md).
 
 | ADR | Title | Status |
 | --- | --- | --- |
@@ -53,6 +57,7 @@ notes/legend block — the stage-9 drafting deliverable. See phases G7–G15 in 
 | [0019](0019-route-poi-model-and-mandatory-angle-structures.md) | Route / POI model and mandatory structures at angle points | Accepted (G9; angle typing superseded by 0023) |
 | [0020](0020-structure-geometry-and-tower-elevation-view.md) | Structure geometry and the tower-elevation view | Accepted (G10) |
 | [0021](0021-bring-fem-forward-for-uneven-spans.md) | Bring FEM forward as the uneven-span section solver | Proposed |
-| [0022](0022-srtm-area-selection-and-plan-view-route-editor.md) | SRTM area selection and the plan-view route editor | Proposed |
-| [0023](0023-angle-as-deflection-derived-property.md) | Angle as a deflection-derived property, not a structure function | Proposed |
+| [0022](0022-srtm-area-selection-and-plan-view-route-editor.md) | SRTM area selection and the plan-view route editor | Accepted (G10c route editor + terrain set; online-basemap/file-dialog import deferred) |
+| [0023](0023-angle-as-deflection-derived-property.md) | Angle as a deflection-derived property, not a structure function | Accepted (G10c) |
 | [0024](0024-production-plan-and-profile-sheets.md) | Production plan & profile sheets (paginated, A1/A0, full label sets) | Proposed |
+| [0025](0025-osm-basemap-and-shared-map-image.md) | OSM basemap and a shared map raster for the plan & 3D views | Proposed |

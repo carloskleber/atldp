@@ -17,12 +17,36 @@ use crate::crs::LocalPlane;
 // ── geographic bounding box ────────────────────────────────────────────────
 
 /// Axis-aligned bounding box in WGS84 geographic coordinates (degrees).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeoBounds {
     pub lat_min: f64,
     pub lat_max: f64,
     pub lon_min: f64,
     pub lon_max: f64,
+}
+
+impl GeoBounds {
+    /// The overlapping window of two boxes, or `None` if they are disjoint (or
+    /// touch only along an edge, which has no area).
+    pub fn intersection(&self, other: &GeoBounds) -> Option<GeoBounds> {
+        let b = GeoBounds {
+            lat_min: self.lat_min.max(other.lat_min),
+            lat_max: self.lat_max.min(other.lat_max),
+            lon_min: self.lon_min.max(other.lon_min),
+            lon_max: self.lon_max.min(other.lon_max),
+        };
+        (b.lat_max > b.lat_min && b.lon_max > b.lon_min).then_some(b)
+    }
+
+    /// The smallest box containing both inputs.
+    pub fn union(&self, other: &GeoBounds) -> GeoBounds {
+        GeoBounds {
+            lat_min: self.lat_min.min(other.lat_min),
+            lat_max: self.lat_max.max(other.lat_max),
+            lon_min: self.lon_min.min(other.lon_min),
+            lon_max: self.lon_max.max(other.lon_max),
+        }
+    }
 }
 
 // ── DEM raster ─────────────────────────────────────────────────────────────
@@ -133,6 +157,114 @@ impl Dem {
             if hi.is_infinite() { 0.0 } else { hi },
         )
     }
+
+    /// Latitude degrees per row step (cell spacing on the N–S axis).
+    fn lat_step(&self) -> f64 {
+        (self.bounds.lat_max - self.bounds.lat_min) / (self.rows.max(2) - 1) as f64
+    }
+
+    /// Longitude degrees per column step (cell spacing on the W–E axis).
+    fn lon_step(&self) -> f64 {
+        (self.bounds.lon_max - self.bounds.lon_min) / (self.cols.max(2) - 1) as f64
+    }
+
+    /// Crop the DEM to the smallest **cell-aligned** sub-raster that fully covers
+    /// `window` (ADR-0022). The result's bounds snap outward to grid lines, so the
+    /// cropped tile contains every cell `window` touches; `None` if `window` does
+    /// not overlap the tile. The grid resolution is preserved — this selects a
+    /// sub-rectangle of the existing samples, it does not resample.
+    pub fn crop(&self, window: GeoBounds) -> Option<Dem> {
+        let w = self.bounds.intersection(&window)?;
+        let lat_step = self.lat_step();
+        let lon_step = self.lon_step();
+
+        // Rows run N→S (row 0 = lat_max); cols run W→E (col 0 = lon_min). Expand the
+        // index range outward so the crop strictly covers the requested window.
+        let r_start = ((self.bounds.lat_max - w.lat_max) / lat_step).floor() as isize;
+        let r_end = ((self.bounds.lat_max - w.lat_min) / lat_step).ceil() as isize;
+        let c_start = ((w.lon_min - self.bounds.lon_min) / lon_step).floor() as isize;
+        let c_end = ((w.lon_max - self.bounds.lon_min) / lon_step).ceil() as isize;
+
+        let r0 = r_start.clamp(0, self.rows as isize - 1) as usize;
+        let r1 = r_end.clamp(0, self.rows as isize - 1) as usize;
+        let c0 = c_start.clamp(0, self.cols as isize - 1) as usize;
+        let c1 = c_end.clamp(0, self.cols as isize - 1) as usize;
+
+        let rows = r1 - r0 + 1;
+        let cols = c1 - c0 + 1;
+        let mut elevations = Vec::with_capacity(rows * cols);
+        for r in r0..=r1 {
+            let base = r * self.cols;
+            elevations.extend_from_slice(&self.elevations[base + c0..=base + c1]);
+        }
+
+        Some(Dem {
+            bounds: GeoBounds {
+                lat_max: self.bounds.lat_max - r0 as f64 * lat_step,
+                lat_min: self.bounds.lat_max - r1 as f64 * lat_step,
+                lon_min: self.bounds.lon_min + c0 as f64 * lon_step,
+                lon_max: self.bounds.lon_min + c1 as f64 * lon_step,
+            },
+            rows,
+            cols,
+            elevations,
+        })
+    }
+}
+
+/// Stitch grid-aligned, equal-resolution DEM tiles into one raster (ADR-0022).
+///
+/// SRTM tiles share their seam line (tile `[n, n+1]` and `[n+1, n+2]` share the
+/// `n+1` row/column), so adjacent tiles are placed on a common grid and their
+/// shared edge simply coincides. Tiles need not tile the union completely — gaps
+/// stay `f32::NAN`. Returns `None` for an empty input or tiles of differing
+/// resolution; a single tile is returned (cloned) unchanged.
+pub fn mosaic(tiles: &[Dem]) -> Option<Dem> {
+    let first = tiles.first()?;
+    if tiles.len() == 1 {
+        return Some(first.clone());
+    }
+    let lat_step = first.lat_step();
+    let lon_step = first.lon_step();
+    // All tiles must share the grid resolution to stitch without resampling.
+    if tiles.iter().any(|t| {
+        (t.lat_step() - lat_step).abs() > lat_step * 1e-6
+            || (t.lon_step() - lon_step).abs() > lon_step * 1e-6
+    }) {
+        return None;
+    }
+
+    let bounds = tiles
+        .iter()
+        .skip(1)
+        .fold(first.bounds, |acc, t| acc.union(&t.bounds));
+
+    let cols = ((bounds.lon_max - bounds.lon_min) / lon_step).round() as usize + 1;
+    let rows = ((bounds.lat_max - bounds.lat_min) / lat_step).round() as usize + 1;
+    let mut elevations = vec![f32::NAN; rows * cols];
+
+    for t in tiles {
+        // Where this tile's NW corner lands in the global grid.
+        let row_off = ((bounds.lat_max - t.bounds.lat_max) / lat_step).round() as usize;
+        let col_off = ((t.bounds.lon_min - bounds.lon_min) / lon_step).round() as usize;
+        for r in 0..t.rows {
+            let gr = row_off + r;
+            if gr >= rows {
+                continue;
+            }
+            let dst = gr * cols + col_off;
+            let src = r * t.cols;
+            let n = t.cols.min(cols - col_off);
+            elevations[dst..dst + n].copy_from_slice(&t.elevations[src..src + n]);
+        }
+    }
+
+    Some(Dem {
+        bounds,
+        rows,
+        cols,
+        elevations,
+    })
 }
 
 // ── local grid ─────────────────────────────────────────────────────────────
@@ -247,4 +379,85 @@ pub fn wireframe_line_list(grid: &LocalGrid) -> Vec<[f32; 3]> {
         }
     }
     verts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 3×3 grid over `[0,1]°×[0,1]°` (step 0.5°), elevations row-major N→S:
+    /// row0 (lat 1.0) = 0,1,2; row1 (lat 0.5) = 3,4,5; row2 (lat 0.0) = 6,7,8.
+    fn grid3() -> Dem {
+        Dem {
+            bounds: GeoBounds {
+                lat_min: 0.0,
+                lat_max: 1.0,
+                lon_min: 0.0,
+                lon_max: 1.0,
+            },
+            rows: 3,
+            cols: 3,
+            elevations: (0..9).map(|i| i as f32).collect(),
+        }
+    }
+
+    #[test]
+    fn crop_selects_cell_aligned_subblock() {
+        let dem = grid3();
+        let sub = dem
+            .crop(GeoBounds {
+                lat_min: 0.1,
+                lat_max: 0.4,
+                lon_min: 0.6,
+                lon_max: 0.9,
+            })
+            .expect("overlaps");
+        // Expands outward to the SE 2×2 block: rows 1–2, cols 1–2.
+        assert_eq!((sub.rows, sub.cols), (2, 2));
+        assert_eq!(sub.elevations, vec![4.0, 5.0, 7.0, 8.0]);
+        assert_eq!(sub.bounds.lat_max, 0.5);
+        assert_eq!(sub.bounds.lat_min, 0.0);
+        assert_eq!(sub.bounds.lon_min, 0.5);
+        assert_eq!(sub.bounds.lon_max, 1.0);
+    }
+
+    #[test]
+    fn crop_disjoint_window_is_none() {
+        assert!(grid3()
+            .crop(GeoBounds {
+                lat_min: 5.0,
+                lat_max: 6.0,
+                lon_min: 5.0,
+                lon_max: 6.0,
+            })
+            .is_none());
+    }
+
+    #[test]
+    fn mosaic_stitches_adjacent_tiles_along_shared_seam() {
+        let mut a = grid3();
+        // Tile B sits immediately east, sharing the lon=1.0 seam column.
+        let mut b = grid3();
+        b.bounds.lon_min = 1.0;
+        b.bounds.lon_max = 2.0;
+        // Make the seam consistent: B's west column == A's east column.
+        a.elevations = vec![0., 1., 2., 3., 4., 5., 6., 7., 8.];
+        b.elevations = vec![2., 30., 40., 5., 60., 70., 8., 90., 100.];
+
+        let m = mosaic(&[a, b]).expect("stitched");
+        assert_eq!((m.rows, m.cols), (3, 5));
+        assert_eq!(m.bounds.lon_min, 0.0);
+        assert_eq!(m.bounds.lon_max, 2.0);
+        // Row 0 (lat 1.0): A's 0,1,2 then B's 30,40 past the shared seam at col 2.
+        assert_eq!(&m.elevations[0..5], &[0.0, 1.0, 2.0, 30.0, 40.0]);
+        // Row 2 (lat 0.0): A's 6,7,8 then B's 90,100.
+        assert_eq!(&m.elevations[10..15], &[6.0, 7.0, 8.0, 90.0, 100.0]);
+    }
+
+    #[test]
+    fn mosaic_single_tile_is_clone_and_empty_is_none() {
+        let only = mosaic(std::slice::from_ref(&grid3())).unwrap();
+        assert_eq!(only.elevations, grid3().elevations);
+        assert!(mosaic(&[]).is_none());
+    }
 }

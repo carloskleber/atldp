@@ -1,6 +1,8 @@
 # ADR-0022 — SRTM area selection and the plan-view route editor
 
-- Status: Proposed
+- Status: Accepted (route editor + terrain set delivered G10c, 2026-06-23; the
+  online-basemap endpoint picker and interactive multi-tile/area file-dialog import
+  remain stage-1 GUI follow-ons)
 - Date: 2026-06-21
 - Builds on: [ADR-0012](0012-desktop-gui-wgpu-egui.md) (GUI),
   [ADR-0013](0013-pure-rust-geospatial-stack.md) (geospatial stack),

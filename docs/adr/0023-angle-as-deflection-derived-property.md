@@ -1,6 +1,6 @@
 # ADR-0023 — Angle is a deflection-derived property, not a structure function
 
-- Status: Proposed
+- Status: Accepted (delivered G10c, 2026-06-23)
 - Date: 2026-06-21
 - Builds on: [ADR-0016](0016-structure-family-library-and-application-chart.md) (application chart),
   [ADR-0019](0019-route-poi-model-and-mandatory-angle-structures.md) (route / POI model)
