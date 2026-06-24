@@ -34,13 +34,15 @@ use atldp_geo::{
     profile::{extract_profile_polyline, ProfilePoint},
 };
 use atldp_model::{
-    analysis, format, report, sheet, ConductorSpec, Poi, PoiKind, ProfileSample, Project, Route,
-    StructureFamily, StructureFunction, TerrainRef, TerrainTile, Tower, TowerFamily,
+    analysis, format, report, sheet, AreaBounds, ConductorSpec, Poi, PoiKind, ProfileSample,
+    Project, Route, StructureFamily, StructureFunction, TerrainRef, TerrainTile, Tower,
+    TowerFamily,
 };
 use atldp_render::{
     camera::{Camera2D, OrbitCamera},
     catenary_line::CatenaryLineResources,
     spotting_lines::{SpottingCallback, SpottingResources, SpottingVertex},
+    terrain_drape::{DrapeVertex, TerrainDrapeCallback, TerrainDrapeResources},
     terrain_mesh::{TerrainMeshResources, TerrainVertex},
 };
 
@@ -433,6 +435,8 @@ struct AppState {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
+    /// Depth buffer for the 3-D pass (ADR-0025); recreated on resize.
+    depth_view: wgpu::TextureView,
 
     egui_ctx: egui::Context,
     egui_winit: egui_winit::State,
@@ -478,6 +482,11 @@ struct AppState {
     plan_ppm: f32,
     basemap_fetcher: Option<BasemapFetcher>,
     basemap_tex: Option<egui::TextureHandle>,
+
+    /// "Set work area" dialog (crop/move the working window for more detail).
+    area_dialog_open: bool,
+    /// Editable lat/lon bounds in the area dialog: [lat_min, lat_max, lon_min, lon_max].
+    area_input: [f64; 4],
 }
 
 impl AppState {
@@ -546,14 +555,28 @@ impl AppState {
             Some(2048),
         );
 
-        let mut egui_renderer =
-            egui_wgpu::Renderer::new(&device, fmt, egui_wgpu::RendererOptions::default());
+        // A shared depth buffer lets the textured 3-D drape occlude itself
+        // (ADR-0025); egui and the line pipelines stay depth-`Always`/no-write so
+        // their painter-order behaviour is unchanged.
+        let depth_view =
+            atldp_render::create_depth_view(&device, surface_config.width, surface_config.height);
+        let mut egui_renderer = egui_wgpu::Renderer::new(
+            &device,
+            fmt,
+            egui_wgpu::RendererOptions {
+                depth_stencil_format: Some(atldp_render::DEPTH_FORMAT),
+                ..Default::default()
+            },
+        );
         egui_renderer
             .callback_resources
             .insert(CatenaryLineResources::new(&device, fmt));
         egui_renderer
             .callback_resources
             .insert(TerrainMeshResources::new(&device, fmt));
+        egui_renderer
+            .callback_resources
+            .insert(TerrainDrapeResources::new(&device, fmt));
         egui_renderer
             .callback_resources
             .insert(SpottingResources::new(&device, fmt));
@@ -591,6 +614,7 @@ impl AppState {
             queue,
             surface,
             surface_config,
+            depth_view,
             egui_ctx,
             egui_winit,
             egui_renderer,
@@ -617,6 +641,93 @@ impl AppState {
             plan_ppm: 0.0,
             basemap_fetcher: None,
             basemap_tex: None,
+            area_dialog_open: false,
+            area_input: [0.0; 4],
+        }
+    }
+
+    /// Drop the current basemap (egui texture, in-flight fetch, 3-D drape) — used
+    /// whenever the working area changes so a stale raster is not shown.
+    fn reset_basemap(&mut self) {
+        self.basemap_tex = None;
+        self.basemap_fetcher = None;
+        if let Some(t) = &mut self.terrain {
+            t.basemap = None;
+        }
+        if let Some(res) = self
+            .egui_renderer
+            .callback_resources
+            .get_mut::<TerrainDrapeResources>()
+        {
+            res.clear_texture();
+        }
+    }
+
+    /// Re-fit both cameras to the current terrain (after an area/tile change).
+    fn refit_cameras(&mut self) {
+        self.orbit = Self::init_camera(&self.terrain);
+        self.plan_ppm = 0.0;
+        if let Some(t) = &self.terrain {
+            let mid_dist = t
+                .profile
+                .last()
+                .map(|p| p.distance_m as f32 * 0.5)
+                .unwrap_or(150.0);
+            self.cam2d.center = [mid_dist, (t.grid.elev_min + t.grid.elev_max) * 0.5];
+        }
+    }
+
+    /// Rebuild the working DEM cropped to `bounds` (mosaicked from the current
+    /// tile set), preserving the route and any spotted towers. A smaller window
+    /// gives finer grid spacing and a higher-zoom basemap (#3).
+    fn apply_work_area(&mut self, bounds: AreaBounds) {
+        let Some(old) = self.terrain.as_ref() else {
+            return;
+        };
+        let new_ref = TerrainRef {
+            tiles: old.source.tiles.clone(),
+            bounds,
+        };
+        let dir = Self::project_path().parent().map(|d| d.to_path_buf());
+        match TerrainData::from_terrain_ref(&new_ref, dir.as_deref()) {
+            Some(mut newt) => {
+                // Keep the route the engineer drew (re-stationed against the new DEM).
+                newt.route = old.route.clone();
+                newt.recompute();
+                self.terrain = Some(newt);
+                self.reset_basemap();
+                self.refit_cameras();
+                self.status = format!(
+                    "Work area set to {:.4}…{:.4}°N, {:.4}…{:.4}°E.",
+                    bounds.lat_min, bounds.lat_max, bounds.lon_min, bounds.lon_max
+                );
+            }
+            None => {
+                self.status =
+                    "Could not set work area — bounds outside the loaded tile(s).".to_string();
+            }
+        }
+    }
+
+    /// Load a different SRTM tile (a new region of the world) from an `.hgt` file,
+    /// adopting the whole tile as the working area (#3). The line route is reseeded.
+    fn load_terrain_tile(&mut self, path: &std::path::Path) {
+        match parse_hgt_name(path).and_then(|(lat, lon)| TerrainData::load(path, lat, lon)) {
+            Some(t) => {
+                self.terrain = Some(t);
+                self.towers.clear();
+                self.selected_tower = None;
+                self.selected_poi = None;
+                self.reset_basemap();
+                self.refit_cameras();
+                self.status = format!("Loaded terrain tile {}", path.display());
+            }
+            None => {
+                self.status = format!(
+                    "Could not load {} — expected an SRTM .hgt named like S23W043.hgt",
+                    path.display()
+                );
+            }
         }
     }
 
@@ -647,8 +758,11 @@ impl AppState {
             let mut c = OrbitCamera::new();
             c.target = glam::Vec3::new(0.0, mid_elev, 0.0);
             c.distance = extent * 1.4;
-            c.pitch = 0.45;
-            c.yaw = 0.5;
+            c.pitch = 0.55;
+            // Look from the south (north = +z into the distance) so the draped
+            // basemap reads north-up, like the plan view, instead of north-toward
+            // the viewer (which made the map look inverted). ADR-0025.
+            c.yaw = std::f32::consts::PI;
             c.far = extent * 8.0;
             c
         } else {
@@ -727,8 +841,7 @@ impl AppState {
                 }
                 self.terrain = Some(terrain);
                 // New working area — drop the stale basemap and refit the plan view.
-                self.basemap_tex = None;
-                self.basemap_fetcher = None;
+                self.reset_basemap();
                 self.plan_ppm = 0.0;
             }
         }
@@ -822,6 +935,7 @@ impl AppState {
         self.surface_config.width = size.width;
         self.surface_config.height = size.height;
         self.surface.configure(&self.device, &self.surface_config);
+        self.depth_view = atldp_render::create_depth_view(&self.device, size.width, size.height);
     }
 
     fn render(&mut self) {
@@ -894,7 +1008,14 @@ impl AppState {
                             store: wgpu::StoreOp::Store,
                         },
                     })],
-                    depth_stencil_attachment: None,
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
                     timestamp_writes: None,
                     occlusion_query_set: None,
                     multiview_mask: None,
@@ -912,51 +1033,228 @@ impl AppState {
         surface_texture.present();
     }
 
-    fn build_ui(&mut self, ui: &mut egui::Ui) {
-        let size = self.window.inner_size();
-        let aspect = size.width as f32 / size.height.max(1) as f32;
-        let view_proj = self.orbit.view_proj(aspect).to_cols_array_2d();
-
-        // Poll a background OSM basemap fetch (G10d, ADR-0025).
-        let polled = self.basemap_fetcher.as_mut().and_then(|f| f.poll());
-        if let Some(result) = polled {
-            self.basemap_fetcher = None;
-            match result {
-                Some(img) => {
-                    let color = egui::ColorImage::from_rgba_unmultiplied(
-                        [img.width as usize, img.height as usize],
-                        &img.rgba,
-                    );
-                    self.basemap_tex = Some(ui.ctx().load_texture(
-                        "osm_basemap",
-                        color,
-                        egui::TextureOptions::LINEAR,
-                    ));
-                    if let Some(t) = &mut self.terrain {
-                        t.basemap = Some(img);
-                    }
-                    self.status = "OSM basemap loaded.".to_string();
-                }
-                None => {
-                    self.status =
-                        "Basemap unavailable (offline or no tiles) — using shading.".to_string();
-                }
-            }
+    /// Begin editing the route, clearing orphaned towers first if any (with a
+    /// confirmation). Shared by the menu and the toolbar.
+    fn request_route_edit(&mut self) {
+        if self.route_edit_mode {
+            self.route_edit_mode = false;
+            self.selected_poi = None;
+        } else if self.towers.is_empty() {
+            self.route_edit_mode = true;
+        } else {
+            // Editing the route re-stations the line and orphans the spotted
+            // towers — confirm before clearing them (G10d).
+            self.confirm_route_edit = true;
         }
+    }
 
-        // ── toolbar ──
+    /// Kick off a background OSM basemap fetch for the current work area (ADR-0025).
+    fn fetch_basemap(&mut self) {
+        if let Some(t) = &self.terrain {
+            let b = t.source.bounds;
+            let bounds = GeoBounds {
+                lat_min: b.lat_min,
+                lat_max: b.lat_max,
+                lon_min: b.lon_min,
+                lon_max: b.lon_max,
+            };
+            self.basemap_fetcher = Some(BasemapFetcher::spawn(bounds, basemap::cache_dir()));
+            self.status = "Fetching OSM basemap…".to_string();
+        }
+    }
+
+    /// Top menu bar — every named command lives here (#4). The toolbar below keeps
+    /// only the icon toggles and live status.
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("menubar").show_inside(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("💾 Save project…").clicked() {
+                        self.save_project();
+                        ui.close();
+                    }
+                    if ui.button("📂 Load project…").clicked() {
+                        self.load_project();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("📄 Export report…").clicked() {
+                        self.open_report_preview();
+                        ui.close();
+                    }
+                    if ui.button("🖼 Export plan-&-profile sheet…").clicked() {
+                        let ctx = ui.ctx().clone();
+                        self.open_sheet_preview(&ctx);
+                        ui.close();
+                    }
+                });
+
+                ui.menu_button("Terrain", |ui| {
+                    let has_terrain = self.terrain.is_some();
+                    if ui
+                        .add_enabled(has_terrain, egui::Button::new("🔍 Set work area…"))
+                        .on_hover_text("Crop the working window — a smaller area gives finer grid and basemap detail")
+                        .clicked()
+                    {
+                        if let Some(t) = &self.terrain {
+                            let b = t.source.bounds;
+                            self.area_input = [b.lat_min, b.lat_max, b.lon_min, b.lon_max];
+                            self.area_dialog_open = true;
+                        }
+                        ui.close();
+                    }
+                    if ui
+                        .button("🌍 Load terrain tile…")
+                        .on_hover_text("Open an SRTM .hgt tile for another region of the world")
+                        .clicked()
+                    {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("Open SRTM terrain tile")
+                            .add_filter("SRTM HGT tile", &["hgt"])
+                            .pick_file()
+                        {
+                            self.load_terrain_tile(&path);
+                        }
+                        ui.close();
+                    }
+                    ui.separator();
+                    let fetching = self.basemap_fetcher.is_some();
+                    if ui
+                        .add_enabled(
+                            self.terrain.is_some() && !fetching,
+                            egui::Button::new("🗺 Fetch OSM basemap"),
+                        )
+                        .on_hover_text("Fetch an OpenStreetMap basemap for the work area")
+                        .clicked()
+                    {
+                        self.fetch_basemap();
+                        ui.close();
+                    }
+                });
+
+                ui.menu_button("Tools", |ui| {
+                    if ui
+                        .selectable_label(self.spotting_mode, "🗼 Spot towers")
+                        .clicked()
+                    {
+                        self.spotting_mode = !self.spotting_mode;
+                        ui.close();
+                    }
+                    if ui
+                        .selectable_label(self.route_edit_mode, "✏ Route edit")
+                        .clicked()
+                    {
+                        self.request_route_edit();
+                        ui.close();
+                    }
+                    ui.separator();
+                    let has_towers = !self.towers.is_empty();
+                    if ui
+                        .add_enabled(has_towers, egui::Button::new("↶ Undo last tower"))
+                        .clicked()
+                    {
+                        self.towers.pop();
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(has_towers, egui::Button::new("🗑 Clear all towers"))
+                        .clicked()
+                    {
+                        self.towers.clear();
+                        self.selected_tower = None;
+                        ui.close();
+                    }
+                });
+
+                ui.menu_button("Parameters", |ui| {
+                    egui::Grid::new("param_grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Attachment height");
+                        ui.add(
+                            egui::DragValue::new(&mut self.attachment_height_m)
+                                .range(5.0..=80.0)
+                                .speed(0.5)
+                                .suffix(" m"),
+                        );
+                        ui.end_row();
+                        ui.label("Min clearance");
+                        ui.add(
+                            egui::DragValue::new(&mut self.min_clearance_m)
+                                .range(1.0..=30.0)
+                                .speed(0.1)
+                                .suffix(" m"),
+                        );
+                        ui.end_row();
+                        ui.label("Horizontal tension");
+                        ui.add(
+                            egui::DragValue::new(&mut self.h_tension_n)
+                                .range(500.0..=300_000.0)
+                                .speed(100.0)
+                                .suffix(" N"),
+                        );
+                        ui.end_row();
+                        ui.label("Vertical exaggeration");
+                        ui.add(
+                            egui::DragValue::new(&mut self.cam2d.vertical_exag)
+                                .range(1.0..=50.0)
+                                .speed(0.1)
+                                .suffix("×"),
+                        );
+                        ui.end_row();
+                        ui.label("Wind pressure");
+                        ui.add(
+                            egui::DragValue::new(&mut self.wind_pressure_pa)
+                                .range(0.0..=3000.0)
+                                .speed(10.0)
+                                .suffix(" Pa"),
+                        );
+                        ui.end_row();
+                    });
+                });
+            });
+        });
+    }
+
+    /// Slim icon toolbar — context toggles (spot / route / basemap) plus live
+    /// terrain, tower-count and worst-clearance status (#4).
+    fn icon_toolbar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("toolbar")
-            .exact_size(32.0)
+            .exact_size(30.0)
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    ui.strong("ATLDP");
+                    if ui
+                        .selectable_label(self.spotting_mode, "🗼")
+                        .on_hover_text("Spot towers")
+                        .clicked()
+                    {
+                        self.spotting_mode = !self.spotting_mode;
+                    }
+                    if ui
+                        .selectable_label(self.route_edit_mode, "✏")
+                        .on_hover_text("Route edit")
+                        .clicked()
+                    {
+                        self.request_route_edit();
+                    }
+                    let fetching = self.basemap_fetcher.is_some();
+                    let basemap_icon = if fetching { "⏳" } else { "🌍" };
+                    if ui
+                        .add_enabled(
+                            self.terrain.is_some() && !fetching,
+                            egui::Button::new(basemap_icon).frame(false),
+                        )
+                        .on_hover_text("Fetch OSM basemap")
+                        .clicked()
+                    {
+                        self.fetch_basemap();
+                    }
+
                     ui.separator();
 
                     if let Some(ref t) = self.terrain {
                         ui.colored_label(
                             egui::Color32::from_rgb(80, 200, 120),
                             format!(
-                                "Terrain {:.0}×{:.0} km  {:.0}–{:.0} m",
+                                "{:.0}×{:.0} km  {:.0}–{:.0} m",
                                 t.grid.east_m / 1000.0,
                                 t.grid.north_m / 1000.0,
                                 t.grid.elev_min,
@@ -968,133 +1266,8 @@ impl AppState {
                     }
 
                     ui.separator();
-
-                    // Spotting toggle
-                    let spot_label = if self.spotting_mode {
-                        "⬛ Stop spotting"
-                    } else {
-                        "🗼 Spot towers"
-                    };
-                    if ui.button(spot_label).clicked() {
-                        self.spotting_mode = !self.spotting_mode;
-                    }
-
-                    // G10c (ADR-0022): draw/move route POIs on the plan view.
-                    let route_label = if self.route_edit_mode {
-                        "⬛ Stop route edit"
-                    } else {
-                        "✏ Route edit"
-                    };
-                    if ui.button(route_label).clicked() {
-                        if self.route_edit_mode {
-                            // Leaving edit mode never destroys anything.
-                            self.route_edit_mode = false;
-                            self.selected_poi = None;
-                        } else if self.towers.is_empty() {
-                            self.route_edit_mode = true;
-                        } else {
-                            // Editing the route re-stations the line and orphans the
-                            // spotted towers — confirm before clearing them (G10d).
-                            self.confirm_route_edit = true;
-                        }
-                    }
-
-                    // G10d (ADR-0025): user-triggered OSM basemap for the work area.
-                    let fetching = self.basemap_fetcher.is_some();
-                    let basemap_label = if fetching {
-                        "⏳ Basemap…"
-                    } else {
-                        "🌍 Basemap"
-                    };
-                    if ui
-                        .add_enabled(
-                            self.terrain.is_some() && !fetching,
-                            egui::Button::new(basemap_label),
-                        )
-                        .on_hover_text("Fetch an OpenStreetMap basemap for the work area")
-                        .clicked()
-                    {
-                        if let Some(t) = &self.terrain {
-                            let b = t.source.bounds;
-                            let bounds = GeoBounds {
-                                lat_min: b.lat_min,
-                                lat_max: b.lat_max,
-                                lon_min: b.lon_min,
-                                lon_max: b.lon_max,
-                            };
-                            self.basemap_fetcher =
-                                Some(BasemapFetcher::spawn(bounds, basemap::cache_dir()));
-                            self.status = "Fetching OSM basemap…".to_string();
-                        }
-                    }
-
-                    ui.label("Attach h:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.attachment_height_m)
-                            .range(5.0..=80.0)
-                            .speed(0.5)
-                            .suffix(" m"),
-                    );
-
-                    ui.label("Min clear:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.min_clearance_m)
-                            .range(1.0..=30.0)
-                            .speed(0.1)
-                            .suffix(" m"),
-                    );
-
-                    ui.label("H tens:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.h_tension_n)
-                            .range(500.0..=300_000.0)
-                            .speed(100.0)
-                            .suffix(" N"),
-                    );
-
-                    ui.label("V.Exag:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.cam2d.vertical_exag)
-                            .range(1.0..=50.0)
-                            .speed(0.1)
-                            .suffix("×"),
-                    );
-
-                    ui.label("Wind:");
-                    ui.add(
-                        egui::DragValue::new(&mut self.wind_pressure_pa)
-                            .range(0.0..=3000.0)
-                            .speed(10.0)
-                            .suffix(" Pa"),
-                    );
-
-                    ui.separator();
-                    // G6: project file format + drafting exports.
-                    if ui.button("💾 Save").clicked() {
-                        self.save_project();
-                    }
-                    if ui.button("📂 Load").clicked() {
-                        self.load_project();
-                    }
-                    if ui.button("📄 Report").clicked() {
-                        self.open_report_preview();
-                    }
-                    if ui.button("🖼 Sheet").clicked() {
-                        let ctx = ui.ctx().clone();
-                        self.open_sheet_preview(&ctx);
-                    }
-
-                    ui.separator();
                     ui.label(format!("Towers: {}", self.towers.len()));
 
-                    if ui.button("Undo").clicked() && !self.towers.is_empty() {
-                        self.towers.pop();
-                    }
-                    if ui.button("Clear").clicked() {
-                        self.towers.clear();
-                    }
-
-                    // Worst clearance indicator
                     if self.towers.len() >= 2 {
                         if let Some(ref t) = self.terrain {
                             let worst = worst_clearance(
@@ -1118,6 +1291,140 @@ impl AppState {
                     }
                 });
             });
+    }
+
+    /// "Set work area" modal — edit the lat/lon working window and apply it (#3).
+    fn area_dialog(&mut self, ui: &mut egui::Ui) {
+        if !self.area_dialog_open {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        egui::Window::new("Set work area")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                ui.label(
+                    "Crop the working window (degrees). A smaller area sharpens the grid \
+                     spacing and the basemap zoom. Bounds must lie within the loaded tile(s).",
+                );
+                egui::Grid::new("area_grid").num_columns(2).show(ui, |ui| {
+                    ui.label("Latitude min");
+                    ui.add(
+                        egui::DragValue::new(&mut self.area_input[0])
+                            .speed(0.001)
+                            .max_decimals(5),
+                    );
+                    ui.end_row();
+                    ui.label("Latitude max");
+                    ui.add(
+                        egui::DragValue::new(&mut self.area_input[1])
+                            .speed(0.001)
+                            .max_decimals(5),
+                    );
+                    ui.end_row();
+                    ui.label("Longitude min");
+                    ui.add(
+                        egui::DragValue::new(&mut self.area_input[2])
+                            .speed(0.001)
+                            .max_decimals(5),
+                    );
+                    ui.end_row();
+                    ui.label("Longitude max");
+                    ui.add(
+                        egui::DragValue::new(&mut self.area_input[3])
+                            .speed(0.001)
+                            .max_decimals(5),
+                    );
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        apply = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.area_dialog_open = false;
+                    }
+                });
+            });
+        if !open {
+            self.area_dialog_open = false;
+        }
+        if apply {
+            let [lat_min, lat_max, lon_min, lon_max] = self.area_input;
+            if lat_max > lat_min && lon_max > lon_min {
+                self.apply_work_area(AreaBounds {
+                    lat_min,
+                    lat_max,
+                    lon_min,
+                    lon_max,
+                });
+                self.area_dialog_open = false;
+            } else {
+                self.status = "Invalid bounds — max must exceed min.".to_string();
+            }
+        }
+    }
+
+    fn build_ui(&mut self, ui: &mut egui::Ui) {
+        let size = self.window.inner_size();
+        let aspect = size.width as f32 / size.height.max(1) as f32;
+        // Mirror clip-space X for the 3-D view. With glam's right-handed camera and
+        // world axes (x=east, z=north), looking from the south puts north into the
+        // distance but flips east↔west; this horizontal flip restores east-right so
+        // the 3-D scene matches the plan view's geography (the basemap is glued to the
+        // geometry, so it stays consistent). Orbit/pan horizontal signs below are
+        // flipped to match. ADR-0025.
+        let view_flip = glam::Mat4::from_scale(glam::Vec3::new(-1.0, 1.0, 1.0));
+        let view_proj = (view_flip * self.orbit.view_proj(aspect)).to_cols_array_2d();
+
+        // Poll a background OSM basemap fetch (G10d, ADR-0025).
+        let polled = self.basemap_fetcher.as_mut().and_then(|f| f.poll());
+        if let Some(result) = polled {
+            self.basemap_fetcher = None;
+            match result {
+                Some(img) => {
+                    let color = egui::ColorImage::from_rgba_unmultiplied(
+                        [img.width as usize, img.height as usize],
+                        &img.rgba,
+                    );
+                    self.basemap_tex = Some(ui.ctx().load_texture(
+                        "osm_basemap",
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                    // Upload the same image to the 3-D drape pipeline (ADR-0025);
+                    // the plan and 3-D views now share one georeferenced raster.
+                    if let Some(res) = self
+                        .egui_renderer
+                        .callback_resources
+                        .get_mut::<TerrainDrapeResources>()
+                    {
+                        res.set_texture(
+                            &self.device,
+                            &self.queue,
+                            &img.rgba,
+                            img.width,
+                            img.height,
+                        );
+                    }
+                    if let Some(t) = &mut self.terrain {
+                        t.basemap = Some(img);
+                    }
+                    self.status = "OSM basemap loaded.".to_string();
+                }
+                None => {
+                    self.status =
+                        "Basemap unavailable (offline or no tiles) — using shading.".to_string();
+                }
+            }
+        }
+
+        // ── toolbar ──
+        self.menu_bar(ui);
+        self.icon_toolbar(ui);
+        self.area_dialog(ui);
 
         // ── status bar (G6 save/load/export feedback) ──
         if !self.status.is_empty() {
@@ -1530,13 +1837,47 @@ impl Viewer<'_> {
 
         if resp.dragged_by(egui::PointerButton::Primary) {
             let d = resp.drag_delta();
-            self.orbit.yaw -= d.x * 0.005;
+            // X is flipped to match the mirrored 3-D projection (see `view_flip`).
+            self.orbit.yaw += d.x * 0.005;
             self.orbit.pitch = (self.orbit.pitch - d.y * 0.005).clamp(-1.45, 1.45);
+        }
+        // Right- or middle-drag pans the orbit target across the view plane, so
+        // the engineer can move around the area (not only rotate about a fixed point).
+        if resp.dragged_by(egui::PointerButton::Secondary)
+            || resp.dragged_by(egui::PointerButton::Middle)
+        {
+            let d = resp.drag_delta();
+            let eye = self.orbit.eye();
+            let forward = (self.orbit.target - eye).normalize();
+            let right = forward.cross(glam::Vec3::Y).normalize();
+            let up = right.cross(forward);
+            // Scale the pan to the current view size so it tracks the cursor. X is
+            // flipped to match the mirrored 3-D projection (see `view_flip`).
+            let k = self.orbit.distance * 0.0018;
+            self.orbit.target += (d.x * right + d.y * up) * k;
         }
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if resp.hovered() && scroll != 0.0 {
             self.orbit.distance =
                 (self.orbit.distance - scroll * self.orbit.distance * 0.01).max(10.0);
+        }
+
+        // OSM basemap drape (ADR-0025) — a filled, textured surface drawn *under*
+        // the wireframe. Added first so the wireframe overlays it; only drawn once
+        // a basemap texture has been uploaded (else the GPU callback is a no-op).
+        if let Some(t) = self.terrain.as_deref() {
+            if let Some(bm) = t.basemap.as_ref() {
+                let (vertices, indices) = build_drape_mesh(&t.grid, &t.plane, bm.bounds);
+                let vp = self.view_proj;
+                ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    TerrainDrapeCallback {
+                        vertices,
+                        indices,
+                        view_proj: vp,
+                    },
+                ));
+            }
         }
 
         // Terrain wireframe
@@ -1586,7 +1927,7 @@ impl Viewer<'_> {
             rect.left_bottom() + egui::vec2(6.0, -22.0),
             egui::Align2::LEFT_BOTTOM,
             format!(
-                "pitch {:.1}°  yaw {:.1}°  dist {:.0} m",
+                "pitch {:.1}°  yaw {:.1}°  dist {:.0} m · drag rotate · right-drag pan · scroll zoom",
                 self.orbit.pitch.to_degrees(),
                 self.orbit.yaw.to_degrees(),
                 self.orbit.distance,
@@ -2362,6 +2703,52 @@ impl Viewer<'_> {
             egui::Color32::from_gray(100),
         );
     }
+}
+
+// ── 3-D drape mesh ──────────────────────────────────────────────────────────
+
+/// Build the textured-surface mesh for the 3-D OSM drape (ADR-0025): one filled
+/// triangle per grid quad, each vertex carrying the map-image UV for its
+/// geographic position. UVs use the same Web-Mercator-correct lon/lat→UV map as
+/// the plan view (`u` linear in longitude, `v` linear in mercator-y), so the plan
+/// and 3-D views stay registered through the shared local plane.
+fn build_drape_mesh(
+    grid: &LocalGrid,
+    plane: &LocalPlane,
+    bm: GeoBounds,
+) -> (Vec<DrapeVertex>, Vec<u32>) {
+    let merc = |d: f64| {
+        (std::f64::consts::FRAC_PI_4 + d.to_radians() / 2.0)
+            .tan()
+            .ln()
+    };
+    let (mn, mx) = (merc(bm.lat_max), merc(bm.lat_min));
+    let v_span = (mn - mx).abs().max(f64::EPSILON);
+    let lon_span = (bm.lon_max - bm.lon_min).abs().max(f64::EPSILON);
+
+    let mut vertices = Vec::with_capacity(grid.positions.len());
+    for p in &grid.positions {
+        let [lat, lon] = plane.to_geo(p[0] as f64, p[2] as f64);
+        let u = ((lon - bm.lon_min) / lon_span) as f32;
+        let v = ((mn - merc(lat)) / v_span) as f32;
+        vertices.push(DrapeVertex {
+            pos: *p,
+            uv: [u.clamp(0.0, 1.0), v.clamp(0.0, 1.0)],
+        });
+    }
+
+    let mut indices =
+        Vec::with_capacity(grid.rows.saturating_sub(1) * grid.cols.saturating_sub(1) * 6);
+    for r in 0..grid.rows.saturating_sub(1) {
+        for c in 0..grid.cols.saturating_sub(1) {
+            let i = (r * grid.cols + c) as u32;
+            let right = i + 1;
+            let down = i + grid.cols as u32;
+            let down_right = down + 1;
+            indices.extend_from_slice(&[i, right, down, right, down_right, down]);
+        }
+    }
+    (vertices, indices)
 }
 
 // ── catenary helpers ──────────────────────────────────────────────────────────
