@@ -2,16 +2,17 @@
 
 This translates the project's goals (see [README](../README.md)) into a phased,
 verifiable plan, and points to the architectural decisions that back it (see
-[adr/](adr/)). It is a living document: phases **G0–G10c are delivered** — the workflow
+[adr/](adr/)). It is a living document: phases **G0–G10f are delivered** — the workflow
 was **reprioritised on 2026-06-21** (ADR-0019–0021) around the real design workflow:
 an explicit route/POI model with obligatory angle structures (**G9**, ADR-0019), the
 tower-elevation view with real attachment geometry (**G10**, ADR-0020), and the
 **plan-view route editor** that finally lets the engineer *draw* the route on the
 terrain — with a tile-set/working-bounds terrain model and the angle correction
-(**G10c**, ADR-0022/0023). The immediate next step polishes that authoring surface —
+(**G10c**, ADR-0022/0023). That authoring surface was then made usable and recognizable —
 pan/zoom, a shared **OpenStreetMap basemap** for the plan and 3-D views, interactive
-drafting dialogs, and route-editor safety fixes (**G10d**, ADR-0025) — followed by
-bringing the FEM section
+drafting dialogs, route-editor safety fixes, a north-up basemap drape on the 3-D terrain,
+a work-area selector and a menu-driven UI (**G10d–G10f**, ADR-0025). The immediate
+next step brings the FEM section
 solver forward for uneven spans (**G11**, ADR-0021), ahead of the previously-planned
 standards load cases, ~1 m terrain, and stringing tables, which move to **G12–G14**
 (ADR-0017–0018), and the **production plan-&-profile sheets** that turn the G6 plot into
@@ -110,34 +111,41 @@ summary:
 | **G10** | **Structure geometry & tower-elevation view** (ADR-0020): `StructureFamily` gains a drawable `AttachmentGeometry` — per-conductor attachment points (role, lateral/vertical offset) plus a body/crossarm silhouette — the single source of truth for where each wire attaches (`Project::reconcile_wire_offsets`). A new **tower-elevation tab** in `atldp-app` draws the selected structure's silhouette with every attachment point labelled by wire and its resulting conductor elevation. "Choosing a structure" becomes inspecting a real shape. | 2026-06-21 |
 | **G10d (basemap)** | **Plan-view camera & OSM basemap** (ADR-0025). The plan view gets a persistent **pan/zoom camera** (centre + pixels-per-metre, fit on load; right-drag pan, scroll zoom) and an adaptive **scale bar**, replacing the fit-every-frame transform. A **user-triggered OpenStreetMap basemap** (toolbar 🌍) fetches/caches slippy tiles on a **background thread** (`ureq` + rustls, `image` PNG decode, disk cache, identifying User-Agent), composites them into one georeferenced image, and **textures the plan DEM mesh** (per-vertex UV; Web-Mercator-correct V) — with **hypsometric shading as the offline fallback** (a failed/empty fetch degrades silently). Imagery only; terrain numerics stay offline (ADR-0013). No `.atldp` change (the basemap is a cache). **The 3-D drape remains** (the 3-D terrain is still a wireframe — see the remainder below). | 2026-06-23 |
 | **G10d (fixes)** | **Route-editor correctness & interactive drafting** (ADR-0006/0022 follow-ups). The 2-D profile draws as the **ground line only** (the axis-anchored `convex_polygon` fan is gone; the SVG sheet already used a true polygon). Entering **route-edit mode with towers present raises a confirmation** that clears the now-orphaned spotting before re-stationing. Report/sheet exports stop being silent: each opens an **in-app preview** (report as text; sheet rasterized via `resvg`) with a **native `rfd` "save as…" dialog**; project **save/load** use native dialogs too (`ATLDP_*` env paths stay the headless fallback). The plan-view pan/zoom, OSM basemap, and 3-D drape remain (ADR-0025, below). | 2026-06-23 |
+| **G10e** | **3-D basemap drape** (ADR-0025, the G10d remainder). The 3-D terrain — until now a `LINE_LIST` wireframe only — gains an **additive textured-surface pipeline** (`atldp-render::terrain_drape`): a filled triangle mesh of the working grid with per-vertex **UVs** (the same Web-Mercator-correct lon/lat→UV map the plan view uses, via the shared `LocalPlane`), sampling the composited OSM `MapImage` the plan view already produces — so the plan and 3-D views show **one shared raster**, registered by construction. The 3-D pass gains a **shared depth buffer** (`DEPTH_FORMAT`) so the opaque drape occludes itself (`Less`); the wireframe/spotting/catenary line pipelines and egui stay depth-`Always`/no-write, so the view is **byte-identical when no basemap is loaded** (the drape is drawn *under* the wireframe and only when a basemap texture has been uploaded — once, on load, not per frame). No new dependencies; release binary **18 MB stripped** (< 30 MB gate ✅). No `.atldp` change (the basemap stays a cache). | 2026-06-24 |
+| **G10f** | **3-D view & authoring UX** (ADR-0025/0022 follow-ups). **3-D orientation:** the default orbit looks from the **south** and the 3-D projection mirrors clip-X, so the draped basemap reads **north-up / east-right** — matching the plan view — instead of north-toward-the-viewer (which read as "inverted"); the 3-D view also gains **right/middle-drag pan** (the camera was rotate-and-zoom only). **Area selection (#3):** a **Terrain ▸ Set work area…** dialog crops the working window to chosen lat/lon bounds (mosaicked from the current tile set, route preserved) — a **smaller area yields finer grid spacing and a higher-zoom basemap** — and **Terrain ▸ Load terrain tile…** opens an SRTM `.hgt` for another region. **Toolbar → menu (#4):** all named commands move to a **menu bar** (File / Terrain / Tools / Parameters); the toolbar keeps only **icon toggles** (spot, route, basemap) and live status (extent, tower count, worst clearance). No `.atldp` change. | 2026-06-24 |
 | **G10c** | **Plan-view route editor & terrain set** (ADR-0022/0023). `atldp-geo` gains tile **`mosaic`** (stitch grid-aligned tiles across a seam) + **`Dem::crop`** (cell-aligned window). `TerrainRef` becomes a **set of source tiles + chosen working `AreaBounds`** (was a single tile); `.atldp` `SCHEMA_VERSION` → **4** with a round-trip-tested v3→v4 migration (single tile → one-element set over the full tile; any stored `Angle` function → running-angle `Suspension` keeping its deflection). A new **plan-view tab** renders the cropped DEM as a hypsometric raster with the **editable route** drawn on it: in route-edit mode, clicking empty map inserts an angle `Poi` on the nearest leg, dragging moves a vertex, the selected vertex's kind is editable, and every edit re-runs `extract_profile_polyline` (re-stationing, ground-sampling, deflection angles) so the profile and tower table update live. The hard-coded diagonal is gone — `TerrainData` carries the real route and project save/load resolves the tile set (mosaic + crop). **ADR-0023:** `StructureFunction` drops `Angle` (now `Suspension`/`Anchor`); "angle" is a deflection-derived property of the location (`Tower::is_angle`, gated by the family chart's `max_line_angle_deg`); `PoiKind::pinned_function` splits into `requires_structure` + an optional fixed function (only terminals fix `Anchor`). | 2026-06-23 |
 
 These phases deliver a working **multi-wire, multi-section** line tool with a
 structure-family library, an explicit route the profile derives from, structures
-seen as real shapes, and — since G10c — a **plan view the route is drawn on**, ahead
-of the FEM section solver (G11) and the standards/terrain/field-output work that
-follows.
+seen as real shapes, a **plan view the route is drawn on** (G10c), and a shared **OSM
+basemap** under both the plan and the 3-D terrain (G10d–G10e) — ahead of the FEM section
+solver (G11) and the standards/terrain/field-output work that follows.
 
-## Next — the 3-D basemap drape (Phase G10d, remainder) — ADR-0025
+## Delivered — the 3-D basemap drape (Phase G10e) — ADR-0025
 
-G10c made the route *drawable*; G10d makes the authoring surface **usable and
-recognizable**. Most of G10d has landed (see the G10d rows above, 2026-06-23): the
-authoring fixes (profile-line, route-edit confirmation, interactive `rfd` drafting), and
-the **plan-view camera + OSM basemap** (pan/zoom, scale bar, cached tiles textured onto
-the plan DEM, with hypsometric fallback). One piece remains: **the 3-D view reflecting
-the same basemap**.
+G10c made the route *drawable*; G10d/G10e make the authoring surface **usable and
+recognizable**. The G10d work landed 2026-06-23 (authoring fixes — profile-line,
+route-edit confirmation, interactive `rfd` drafting — and the **plan-view camera + OSM
+basemap**: pan/zoom, scale bar, cached tiles textured onto the plan DEM with hypsometric
+fallback). The last piece — **the 3-D view reflecting the same basemap** — landed as
+**G10e** (2026-06-24, see the delivered row above):
 
-### G10d remainder — the 3-D basemap drape — *stage 4* — ADR-0025
-
-- **3-D reflects the plan image.** The same map image **textures the 3-D terrain**.
-  This is *not* a small add: the 3-D terrain is today a `LINE_LIST` **wireframe**
-  (`atldp-render::terrain_mesh`), so the drape needs a **new textured-surface pipeline**
-  — a filled triangle mesh with per-vertex UVs (reusing the plan view's lon/lat→UV map,
-  Web-Mercator-correct), a texture + sampler bind group, and a WGSL shader — added
-  *additively* under the wireframe so the 3-D view never regresses when no basemap is
-  loaded. Carried as its own step because it is a GPU pipeline change that cannot be
-  auto-verified. The composited `MapImage` (already produced for the plan view) is the
-  texture source; no `.atldp` change (the basemap stays a cache).
+- **3-D reflects the plan image.** The same composited `MapImage` now **textures the 3-D
+  terrain**. The 3-D terrain was a `LINE_LIST` **wireframe** (`atldp-render::terrain_mesh`),
+  so the drape is a **new textured-surface pipeline** (`atldp-render::terrain_drape`) — a
+  filled triangle mesh with per-vertex UVs (reusing the plan view's Web-Mercator-correct
+  lon/lat→UV map via the shared `LocalPlane`), a texture + sampler bind group, and a WGSL
+  shader — added *additively* under the wireframe, and a **shared depth buffer** so the
+  opaque surface occludes itself while the line pipelines and egui stay depth-`Always`/
+  no-write (the 3-D view is unchanged when no basemap is loaded). The texture uploads once
+  on basemap load, not per frame; no `.atldp` change (the basemap stays a cache).
+- **North-up orientation (G10f).** The default orbit looks from the south and the 3-D
+  projection mirrors clip-X, so the drape reads **north-up / east-right** like the plan
+  (with the right-handed camera and world axes x=east/z=north, a south-facing view puts
+  north into the distance but flips east↔west; the mirror restores it — the basemap is
+  glued to the geometry, so it stays consistent). The 3-D view also gained **right-drag
+  pan** and a **menu-bar UI** with a **work-area selector** (crop for finer detail) — see
+  the G10f row.
 
 ### Obligatory-structure signalling — route → spotting (ADR-0019/0023)
 
@@ -315,19 +323,26 @@ and an SVG plot. G15 turns that plot into the **document a line engineer recogni
   **Resolved (route editor):** `atldp-geo` `mosaic` + `Dem::crop` produce the working
   DEM; `TerrainRef` is a `Vec<TerrainTile>` + `AreaBounds`; `TerrainData` holds the
   editable `Vec<Poi>` and `recompute()` re-stations, ground-samples, and re-derives the
-  profile (`extract_profile_polyline`) on every plan-view edit. **Still open:** the
-  stage-1 online-basemap endpoint picker and the interactive multi-tile/area file-dialog
-  import (see "Remaining G10c follow-on" above).
+  profile (`extract_profile_polyline`) on every plan-view edit. **Area selection landed
+  (G10f):** a *Set work area…* dialog crops the working window to typed lat/lon bounds
+  (route preserved) for finer grid/basemap detail, and *Load terrain tile…* opens an
+  `.hgt` for another region. **Still open:** a graphical (drag-a-box) area picker and the
+  stage-1 online-basemap endpoint picker, and multi-tile auto-discovery for a span that
+  crosses a seam not yet loaded.
 - **FEM kernel selection (G11):** the precise geometric criterion that switches a
   section from the analytic ruling span to the FEM solver (span-unevenness ratio,
   inclination, operating temperature), and the validated agreement tolerance between
   them (ADR-0021/0008).
-- **Basemap source & policy (G10d, ADR-0025):** which tile provider/style and the
+- ~~**Basemap source & policy (G10d–G10e, ADR-0025):** which tile provider/style and the
   zoom-selection rule for a window; OSM tile-usage-policy compliance (User-Agent,
   cache, request volume) vs. a self-hosted/permissive alternative; texture-memory
   budget for the 3-D drape; and the HTTP/decoder/SVG-raster dependencies (`ureq`,
-  `image`, `resvg`) against the < 30 MB binary gate. Proposed in ADR-0025; resolution
-  lands with the phase.
+  `image`, `resvg`) against the < 30 MB binary gate.~~ **Resolved:** OSM tiles via a
+  configurable `TILE_URL` (single point of change for a self-hosted/permissive source),
+  identifying `User-Agent`, on-disk cache and a ≤64-tile-per-window cap; zoom picked so
+  the window stays within ~6 tiles. The 3-D drape (G10e) reuses the one composited
+  `MapImage` as its texture (uploaded once, ≤ 8×8×256² RGBA), adding **no new
+  dependencies**; the release binary is **18 MB stripped** (< 30 MB gate).
 - ~~**Structure geometry data (G10):** the representation of a family's attachment /
   silhouette geometry, and how it reconciles with the per-`Wire` offsets introduced in
   G7 (ADR-0020).~~ **Resolved:** an `AttachmentGeometry` on `StructureFamily` — an

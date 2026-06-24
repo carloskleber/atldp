@@ -106,7 +106,7 @@ impl SpottingResources {
                 topology: wgpu::PrimitiveTopology::LineList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil: Some(crate::depth_passthrough()),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,

@@ -1,7 +1,8 @@
 # ADR-0025 — OpenStreetMap basemap and a shared map raster for the plan & 3D views
 
-- Status: Accepted (plan-view basemap + camera delivered G10d, 2026-06-23; the 3-D
-  textured-terrain drape — a new wgpu surface pipeline — remains)
+- Status: Accepted, **fully delivered** (plan-view basemap + camera, G10d 2026-06-23;
+  the 3-D textured-terrain drape — a new wgpu surface pipeline — landed G10e, 2026-06-24;
+  north-up orientation, 3-D pan and work-area selection, G10f 2026-06-24)
 - Date: 2026-06-23
 - Builds on: [ADR-0012](0012-desktop-gui-wgpu-egui.md) (GUI / rendering),
   [ADR-0013](0013-pure-rust-geospatial-stack.md) (pure-Rust, offline-first geospatial
@@ -75,6 +76,22 @@ rides a `#[serde(default)]` field, no schema bump.
   error dialog.
 - **Registration:** plan transform and terrain UVs both derive from the working
   `LocalPlane`, so the route, the basemap and the 3-D drape line up by construction.
+- **Depth buffer (3-D drape, G10e).** The drape is a *filled, opaque* surface, so the
+  3-D pass gained a shared depth buffer (`atldp_render::DEPTH_FORMAT`): the drape writes
+  and tests depth (`Less`) so the terrain occludes itself correctly. The existing line
+  pipelines (wireframe, spotting, catenary) and egui itself stay depth-`Always`/no-write,
+  so enabling the buffer leaves their painter-order behaviour unchanged — when no basemap
+  is loaded the drape is simply not drawn and the 3-D view is identical to before. The
+  texture is uploaded **once** when a basemap loads (`TerrainDrapeResources::set_texture`),
+  not per frame; no new dependencies (the binary stays ~18 MB stripped, < 30 MB gate).
+- **Orientation (3-D drape, G10f).** With the right-handed orbit camera and world axes
+  (x=east, z=north), a south-facing view puts north into the distance but flips east↔west.
+  The 3-D projection therefore **mirrors clip-space X** (and the orbit/pan horizontal input
+  signs follow), so the drape reads **north-up / east-right** like the plan view. The
+  basemap texture is glued to the geometry, so it mirrors with it and stays registered; the
+  pipelines use no back-face culling, so the winding flip is harmless. The 3-D view also
+  gained **right/middle-drag pan**, and the basemap can be fetched for any **work area**
+  cropped via the new *Set work area…* dialog (smaller window ⇒ finer grid + higher zoom).
 - Realizes ADR-0022's deferred **online basemap** relaxation; the future stage-1
   endpoint-picking map (ADR-0022) reuses this same tile layer.
 - **Operational:** tile-usage-policy compliance and provider choice are documented
